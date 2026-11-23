@@ -298,6 +298,7 @@ public:
 
 	virtual SamplerID sampler_create(const SamplerState &p_state) = 0;
 	virtual void sampler_free(SamplerID p_sampler) = 0;
+	virtual bool acceleration_structure_is_vertex_format_supported(DataFormat p_format) { return false; }
 	virtual bool sampler_is_format_supported_for_filter(DataFormat p_format, SamplerFilter p_filter) = 0;
 
 	/**********************/
@@ -732,6 +733,7 @@ public:
 	virtual void command_bind_compute_uniform_sets(CommandBufferID p_cmd_buffer, VectorView<UniformSetID> p_uniform_sets, ShaderID p_shader, uint32_t p_first_set_index, uint32_t p_set_count, uint32_t p_dynamic_offsets) = 0;
 
 	// Dispatching.
+	virtual void command_compute_use_buffer(CommandBufferID p_cmd_buffer, BufferID p_buffer) {}
 	virtual void command_compute_dispatch(CommandBufferID p_cmd_buffer, uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups) = 0;
 	virtual void command_compute_dispatch_indirect(CommandBufferID p_cmd_buffer, BufferID p_indirect_buffer, uint64_t p_offset) = 0;
 

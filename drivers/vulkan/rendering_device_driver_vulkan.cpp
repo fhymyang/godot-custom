@@ -584,6 +584,9 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, false);
+#if VULKAN_RAYTRACING_ENABLED
+	_register_requested_device_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME, false);
+#endif
 	_register_requested_device_extension(VK_NV_RAY_TRACING_VALIDATION_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, false);
 
@@ -913,6 +916,7 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 		VkPhysicalDevicePipelineCreationCacheControlFeatures pipeline_cache_control_features = {};
 		VkPhysicalDeviceVulkanMemoryModelFeatures memory_model_features = {};
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure_features = {};
+		VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {};
 		VkPhysicalDeviceRayTracingPipelineFeaturesKHR raytracing_pipeline_features = {};
 		VkPhysicalDeviceSynchronization2FeaturesKHR sync_2_features = {};
 		VkPhysicalDeviceRayTracingValidationFeaturesNV raytracing_validation_features = {};
@@ -988,6 +992,12 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 			next_features = &acceleration_structure_features;
 		}
 
+		if (enabled_device_extension_names.has(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+			ray_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+			ray_query_features.pNext = next_features;
+			next_features = &ray_query_features;
+		}
+
 		if (enabled_device_extension_names.has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
 			raytracing_pipeline_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
 			raytracing_pipeline_features.pNext = next_features;
@@ -1019,9 +1029,7 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 				shader_capabilities.shader_float16_is_supported = device_features_vk_1_2.shaderFloat16;
 				shader_capabilities.shader_int8_is_supported = device_features_vk_1_2.shaderInt8;
 			}
-			if (enabled_device_extension_names.has(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME)) {
-				buffer_device_address_support = device_features_vk_1_2.bufferDeviceAddress;
-			}
+			buffer_device_address_support = device_features_vk_1_2.bufferDeviceAddress;
 			if (enabled_device_extension_names.has(VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME)) {
 				vulkan_memory_model_support = device_features_vk_1_2.vulkanMemoryModel;
 				vulkan_memory_model_device_scope_support = device_features_vk_1_2.vulkanMemoryModelDeviceScope;
@@ -1089,6 +1097,8 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 		if (enabled_device_extension_names.has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
 			acceleration_structure_capabilities.acceleration_structure_support = acceleration_structure_features.accelerationStructure;
 		}
+
+		ray_query_support = ray_query_features.rayQuery && acceleration_structure_capabilities.acceleration_structure_support && buffer_device_address_support;
 
 		if (enabled_device_extension_names.has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
 			raytracing_capabilities.raytracing_pipeline_support = raytracing_pipeline_features.rayTracingPipeline;
@@ -1425,6 +1435,14 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		create_info_next = &acceleration_structure_features;
 	}
 
+	VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {};
+	if (ray_query_support) {
+		ray_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+		ray_query_features.pNext = create_info_next;
+		ray_query_features.rayQuery = VK_TRUE;
+		create_info_next = &ray_query_features;
+	}
+
 	VkPhysicalDeviceRayTracingPipelineFeaturesKHR raytracing_pipeline_features = {};
 	if (raytracing_capabilities.raytracing_pipeline_support) {
 		raytracing_pipeline_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
@@ -1536,6 +1554,7 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		if (enabled_device_extension_names.has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
 			device_functions.CreateAccelerationStructureKHR = PFN_vkCreateAccelerationStructureKHR(functions.GetDeviceProcAddr(vk_device, "vkCreateAccelerationStructureKHR"));
 			device_functions.DestroyAccelerationStructureKHR = PFN_vkDestroyAccelerationStructureKHR(functions.GetDeviceProcAddr(vk_device, "vkDestroyAccelerationStructureKHR"));
+			device_functions.GetAccelerationStructureDeviceAddressKHR = PFN_vkGetAccelerationStructureDeviceAddressKHR(functions.GetDeviceProcAddr(vk_device, "vkGetAccelerationStructureDeviceAddressKHR"));
 			device_functions.GetAccelerationStructureBuildSizesKHR = PFN_vkGetAccelerationStructureBuildSizesKHR(functions.GetDeviceProcAddr(vk_device, "vkGetAccelerationStructureBuildSizesKHR"));
 			device_functions.CmdBuildAccelerationStructuresKHR = PFN_vkCmdBuildAccelerationStructuresKHR(functions.GetDeviceProcAddr(vk_device, "vkCmdBuildAccelerationStructuresKHR"));
 		}
@@ -1844,6 +1863,13 @@ Error RenderingDeviceDriverVulkan::initialize(uint32_t p_device_index, uint32_t 
 	ERR_FAIL_COND_V_MSG(err != OK, err, "Couldn't initialize Vulkan device extensions. This may be caused by an incompatible or outdated graphics driver.");
 
 	_get_device_properties();
+
+	// The ray query path uses the core Vulkan 1.2 buffer address and SPIR-V 1.4 support.
+	if (physical_device_properties.apiVersion < VK_API_VERSION_1_2 ||
+			!enabled_device_extension_names.has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) ||
+			!enabled_device_extension_names.has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) {
+		enabled_device_extension_names.erase(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+	}
 
 	err = _check_device_features();
 	ERR_FAIL_COND_V_MSG(err != OK, err, "Couldn't initialize Vulkan device features. This may be caused by an incompatible or outdated graphics driver.");
@@ -2788,6 +2814,12 @@ RDD::SamplerID RenderingDeviceDriverVulkan::sampler_create(const SamplerState &p
 
 void RenderingDeviceDriverVulkan::sampler_free(SamplerID p_sampler) {
 	vkDestroySampler(vk_device, (VkSampler)p_sampler.id, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SAMPLER));
+}
+
+bool RenderingDeviceDriverVulkan::acceleration_structure_is_vertex_format_supported(DataFormat p_format) {
+	VkFormatProperties properties;
+	vkGetPhysicalDeviceFormatProperties(physical_device, RD_TO_VK_FORMAT[p_format], &properties);
+	return (properties.bufferFeatures & VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR) != 0;
 }
 
 bool RenderingDeviceDriverVulkan::sampler_is_format_supported_for_filter(DataFormat p_format, SamplerFilter p_filter) {
@@ -6337,7 +6369,19 @@ RDD::AccelerationStructureID RenderingDeviceDriverVulkan::blas_create(VectorView
 	size_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
 
 	device_functions.GetAccelerationStructureBuildSizesKHR(vk_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &accel_info->build_info, max_primitive_counts.ptr(), &size_info);
-	_acceleration_structure_create(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, size_info, accel_info);
+	if (!_acceleration_structure_create(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, size_info, accel_info)) {
+		VersatileResource::free(resources_allocator, accel_info);
+		return AccelerationStructureID();
+	}
+
+	VkAccelerationStructureDeviceAddressInfoKHR address_info = {};
+	address_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+	address_info.accelerationStructure = accel_info->vk_acceleration_structure;
+	accel_info->device_address = device_functions.GetAccelerationStructureDeviceAddressKHR(vk_device, &address_info);
+	if (accel_info->device_address == 0) {
+		acceleration_structure_free(AccelerationStructureID(accel_info));
+		ERR_FAIL_V_MSG(AccelerationStructureID(), "Couldn't get the Vulkan BLAS device address.");
+	}
 
 	return AccelerationStructureID(accel_info);
 #else
@@ -6385,7 +6429,10 @@ RDD::AccelerationStructureID RenderingDeviceDriverVulkan::tlas_create(uint32_t p
 
 	accel_info->range_infos.resize_initialized(1);
 
-	_acceleration_structure_create(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, size_info, accel_info);
+	if (!_acceleration_structure_create(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, size_info, accel_info)) {
+		VersatileResource::free(resources_allocator, accel_info);
+		return AccelerationStructureID();
+	}
 	return AccelerationStructureID(accel_info);
 #else
 	return AccelerationStructureID();
@@ -6403,7 +6450,7 @@ void RenderingDeviceDriverVulkan::acceleration_structure_instance_write(uint8_t 
 
 	if (p_instance.blas) {
 		const AccelerationStructureInfo *blas_info = (const AccelerationStructureInfo *)p_instance.blas.id;
-		vk_instance->accelerationStructureReference = buffer_get_device_address(blas_info->buffer);
+		vk_instance->accelerationStructureReference = blas_info->device_address;
 	} else {
 		vk_instance->accelerationStructureReference = 0;
 	}
@@ -6416,10 +6463,10 @@ static VkDeviceAddress _align_up_address(VkDeviceAddress address, VkDeviceAddres
 }
 #endif
 
-void RenderingDeviceDriverVulkan::_acceleration_structure_create(VkAccelerationStructureTypeKHR p_type, VkAccelerationStructureBuildSizesInfoKHR p_size_info, AccelerationStructureInfo *r_accel_info) {
+bool RenderingDeviceDriverVulkan::_acceleration_structure_create(VkAccelerationStructureTypeKHR p_type, VkAccelerationStructureBuildSizesInfoKHR p_size_info, AccelerationStructureInfo *r_accel_info) {
 #if VULKAN_RAYTRACING_ENABLED
 	RDD::BufferID buffer = buffer_create(p_size_info.accelerationStructureSize, RDD::BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT | RDD::BUFFER_USAGE_STORAGE_BIT | RDD::BUFFER_USAGE_DEVICE_ADDRESS_BIT, RDD::MEMORY_ALLOCATION_TYPE_GPU, UINT64_MAX);
-	r_accel_info->buffer = buffer;
+	ERR_FAIL_COND_V(!buffer, false);
 
 	// Scratch address must be a multiple of minAccelerationStructureScratchOffsetAlignment.
 	r_accel_info->scratch_alignment = acceleration_structure_capabilities.min_acceleration_structure_scratch_offset_alignment;
@@ -6431,8 +6478,15 @@ void RenderingDeviceDriverVulkan::_acceleration_structure_create(VkAccelerationS
 	accel_create_info.size = p_size_info.accelerationStructureSize;
 	accel_create_info.buffer = ((const BufferInfo *)buffer.id)->vk_buffer;
 	VkResult err = device_functions.CreateAccelerationStructureKHR(vk_device, &accel_create_info, nullptr, &r_accel_info->vk_acceleration_structure);
-	ERR_FAIL_COND_MSG(err, vformat("Couldn't create Vulkan raytracing acceleration structure (VkResult error %d).", err));
+	if (err != VK_SUCCESS) {
+		buffer_free(buffer);
+		ERR_FAIL_V_MSG(false, vformat("Couldn't create Vulkan raytracing acceleration structure (VkResult error %d).", err));
+	}
+	r_accel_info->buffer = buffer;
 	r_accel_info->build_info.dstAccelerationStructure = r_accel_info->vk_acceleration_structure;
+	return true;
+#else
+	return false;
 #endif
 }
 
@@ -6440,12 +6494,8 @@ void RenderingDeviceDriverVulkan::acceleration_structure_free(AccelerationStruct
 #if VULKAN_RAYTRACING_ENABLED
 	AccelerationStructureInfo *accel_info = (AccelerationStructureInfo *)p_acceleration_structure.id;
 	ERR_FAIL_NULL_MSG(accel_info, "Vulkan raytracing acceleration structure input parameter is not valid.");
-	if (accel_info->buffer) {
-		buffer_free(accel_info->buffer);
-	}
-	if (accel_info->vk_acceleration_structure) {
-		device_functions.DestroyAccelerationStructureKHR(vk_device, accel_info->vk_acceleration_structure, nullptr);
-	}
+	device_functions.DestroyAccelerationStructureKHR(vk_device, accel_info->vk_acceleration_structure, nullptr);
+	buffer_free(accel_info->buffer);
 	VersatileResource::free(resources_allocator, accel_info);
 #endif
 }

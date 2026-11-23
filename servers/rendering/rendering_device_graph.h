@@ -68,6 +68,7 @@ public:
 			TYPE_BIND_UNIFORM_SETS,
 			TYPE_DISPATCH,
 			TYPE_DISPATCH_INDIRECT,
+			TYPE_USE_BUFFER,
 			TYPE_SET_PUSH_CONSTANT,
 			TYPE_UNIFORM_SET_PREPARE_FOR_USE
 		};
@@ -741,6 +742,10 @@ private:
 		}
 	};
 
+	struct ComputeListUseBufferInstruction : ComputeListInstruction {
+		RDD::BufferID buffer;
+	};
+
 	struct ComputeListDispatchInstruction : ComputeListInstruction {
 		uint32_t x_groups = 0;
 		uint32_t y_groups = 0;
@@ -910,6 +915,7 @@ public:
 	void add_compute_list_bind_pipeline(RDD::PipelineID p_pipeline);
 	void add_compute_list_bind_uniform_set(RDD::ShaderID p_shader, RDD::UniformSetID p_uniform_set, uint32_t set_index);
 	void add_compute_list_bind_uniform_sets(RDD::ShaderID p_shader, VectorView<RDD::UniformSetID> p_uniform_set, uint32_t p_first_set_index, uint32_t p_set_count);
+	void add_compute_list_use_buffer(RDD::BufferID p_buffer);
 	void add_compute_list_dispatch(uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups);
 	void add_compute_list_dispatch_indirect(RDD::BufferID p_buffer, uint32_t p_offset);
 	void add_compute_list_set_push_constant(RDD::ShaderID p_shader, const void *p_data, uint32_t p_data_size);

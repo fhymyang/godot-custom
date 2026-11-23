@@ -1369,6 +1369,7 @@ public:
 		uint32_t index_count = 0;
 	};
 
+	bool acceleration_structure_is_vertex_format_supported(DataFormat p_format) const;
 	RID blas_create(Span<AccelerationStructureGeometry> p_geometries, BitField<AccelerationStructureFlagBits> p_flags);
 	RID tlas_create(uint32_t p_max_instance_count, BitField<AccelerationStructureFlagBits> p_flags);
 
@@ -1673,6 +1674,7 @@ private:
 public:
 	ComputeListID compute_list_begin();
 	void compute_list_bind_compute_pipeline(ComputeListID p_list, RID p_compute_pipeline);
+	void compute_list_add_buffer_read(ComputeListID p_list, RID p_buffer);
 	void compute_list_bind_uniform_set(ComputeListID p_list, RID p_uniform_set, uint32_t p_index);
 	void compute_list_set_push_constant(ComputeListID p_list, const void *p_data, uint32_t p_data_size);
 	void compute_list_dispatch(ComputeListID p_list, uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups);

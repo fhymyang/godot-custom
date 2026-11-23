@@ -548,6 +548,10 @@ _FORCE_INLINE_ static MTL::Stages convert_src_pipeline_stages_to_metal(BitField<
 		mtlStages |= MTL::StageDispatch;
 	}
 
+	if (p_stages.has_flag(RDD::PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT)) {
+		mtlStages |= MTL::StageAccelerationStructure;
+	}
+
 	// Blit stage (transfer operations).
 	if (p_stages & RDD::PIPELINE_STAGE_COPY_BIT) {
 		mtlStages |= MTL::StageBlit;
@@ -587,6 +591,10 @@ _FORCE_INLINE_ static MTL::Stages convert_dst_pipeline_stages_to_metal(BitField<
 		mtlStages |= MTL::StageDispatch;
 	}
 
+	if (p_stages.has_flag(RDD::PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT)) {
+		mtlStages |= MTL::StageAccelerationStructure;
+	}
+
 	// Blit stage (transfer operations).
 	if (p_stages & RDD::PIPELINE_STAGE_COPY_BIT) {
 		mtlStages |= MTL::StageBlit;
@@ -601,6 +609,19 @@ _FORCE_INLINE_ static MTL::Stages convert_dst_pipeline_stages_to_metal(BitField<
 }
 
 GODOT_CLANG_WARNING_POP
+
+struct MDAccelerationStructure {
+	NS::SharedPtr<MTL::AccelerationStructure> resource;
+	NS::SharedPtr<MTL::AccelerationStructureDescriptor> descriptor;
+	LocalVector<MTL::Resource *> bottom_level_resources;
+	uint32_t scratch_size = 0;
+};
+
+struct alignas(64) MDAccelerationStructureInstance {
+	MTL::IndirectAccelerationStructureInstanceDescriptor descriptor;
+	// After the GPU descriptor, keep the CPU reference needed for Metal residency declarations.
+	MTL::AccelerationStructure *bottom_level = nullptr;
+};
 
 #pragma mark - Command Buffer Base
 
@@ -723,6 +744,8 @@ public:
 #pragma mark - Compute Commands
 
 	virtual void compute_bind_uniform_sets(VectorView<RDD::UniformSetID> p_uniform_sets, RDD::ShaderID p_shader, uint32_t p_first_set_index, uint32_t p_set_count, uint32_t p_dynamic_offsets) = 0;
+	virtual void build_acceleration_structure(MDAccelerationStructure &p_structure, MTL::Buffer *p_scratch, MTL::Buffer *p_instances = nullptr, uint32_t p_instance_offset = 0, uint32_t p_instance_count = 0) = 0;
+	virtual void compute_use_buffer(RDD::BufferID p_buffer) = 0;
 	virtual void compute_dispatch(uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups) = 0;
 	virtual void compute_dispatch_indirect(RDD::BufferID p_indirect_buffer, uint64_t p_offset) = 0;
 

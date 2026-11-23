@@ -301,6 +301,11 @@ void RenderingDevice::_tlas_remove_blas_dependencies(AccelerationStructure *p_tl
 	p_tlas->acceleration_structure_dependencies.clear();
 }
 
+bool RenderingDevice::acceleration_structure_is_vertex_format_supported(DataFormat p_format) const {
+	ERR_FAIL_INDEX_V(p_format, DATA_FORMAT_MAX, false);
+	return driver->acceleration_structure_is_vertex_format_supported(p_format);
+}
+
 RID RenderingDevice::blas_create(Span<AccelerationStructureGeometry> p_geometries, BitField<AccelerationStructureFlagBits> p_flags) {
 	ERR_FAIL_COND_V_MSG(!has_feature(SUPPORTS_RAYTRACING_PIPELINE) && !has_feature(SUPPORTS_RAY_QUERY), RID(), "The current rendering device has neither raytracing pipeline nor ray query support.");
 
@@ -518,7 +523,7 @@ Error RenderingDevice::tlas_build(RID p_tlas, Span<AccelerationStructureInstance
 		AccelerationStructure::InstanceBuffer instance_buffer;
 		instance_buffer.driver_id = instance_buffer_driver_id;
 		instance_buffer.frame_used = frames_drawn;
-		instance_buffer.used_size = 0;
+		instance_buffer.used_size = instance_buffer_used_size;
 		instance_buffer.data_ptr = data_ptr;
 
 		instance_buffer_index = tlas->instance_buffers.size();
@@ -532,6 +537,7 @@ Error RenderingDevice::tlas_build(RID p_tlas, Span<AccelerationStructureInstance
 	thread_local LocalVector<RDG::ResourceTracker *> draw_trackers;
 	draw_trackers.clear();
 
+	const bool supports_ray_query = has_feature(SUPPORTS_RAY_QUERY);
 	for (uint32_t i = 0; i < p_instances.size(); i++) {
 		const AccelerationStructureInstance &rd_instance = p_instances[i];
 
@@ -543,7 +549,7 @@ Error RenderingDevice::tlas_build(RID p_tlas, Span<AccelerationStructureInstance
 		rdd_instance.flags = rd_instance.flags;
 
 		if (rd_instance.blas.is_valid()) {
-			ERR_FAIL_COND_V_MSG(!rd_instance.hit_sbt_range, ERR_INVALID_PARAMETER, "Instance " + itos(i) + " has an invalid hit shader binding table range.");
+			ERR_FAIL_COND_V_MSG(!rd_instance.hit_sbt_range && !supports_ray_query, ERR_INVALID_PARAMETER, "Instance " + itos(i) + " has an invalid hit shader binding table range.");
 
 			AccelerationStructure *blas = acceleration_structure_owner.get_or_null(rd_instance.blas);
 			ERR_FAIL_NULL_V(blas, ERR_INVALID_PARAMETER);
@@ -645,7 +651,7 @@ void RenderingDevice::_hit_sbt_add_dirty_range(HitShaderBindingTable *p_hit_sbt,
 }
 
 RID RenderingDevice::hit_sbt_create(RID p_raytracing_pipeline, uint32_t p_initial_hit_group_capacity) {
-	ERR_FAIL_COND_V_MSG(!has_feature(SUPPORTS_RAYTRACING_PIPELINE) && !has_feature(SUPPORTS_RAY_QUERY), RID(), "The current rendering device has neither raytracing pipeline nor ray query support.");
+	ERR_FAIL_COND_V_MSG(!has_feature(SUPPORTS_RAYTRACING_PIPELINE), RID(), "The current rendering device has no raytracing pipeline support.");
 
 	RaytracingPipeline *raytracing_pipeline = raytracing_pipeline_owner.get_or_null(p_raytracing_pipeline);
 	ERR_FAIL_NULL_V(raytracing_pipeline, RID());
@@ -4020,8 +4026,12 @@ RID RenderingDevice::index_buffer_create(uint32_t p_index_count, IndexBufferForm
 	index_buffer.supports_restart_indices = p_use_restart_indices;
 	index_buffer.index_count = p_index_count;
 	uint32_t size_bytes = p_index_count * ((p_format == INDEX_BUFFER_FORMAT_UINT16) ? 2 : 4);
+// BLAS creation validates the maximum index in release builds too.
+	bool validate_indices = p_creation_bits.has_flag(BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
 #ifdef DEBUG_ENABLED
-	if (p_data.size()) {
+	validate_indices = true;
+#endif
+	if (validate_indices && p_data.size()) {
 		index_buffer.max_index = 0;
 		ERR_FAIL_COND_V_MSG((uint32_t)p_data.size() != size_bytes, RID(),
 				"Default index buffer initializer array size (" + itos(p_data.size()) + ") does not match format required size (" + itos(size_bytes) + ").");
@@ -4046,9 +4056,6 @@ RID RenderingDevice::index_buffer_create(uint32_t p_index_count, IndexBufferForm
 	} else {
 		index_buffer.max_index = 0xFFFFFFFF;
 	}
-#else
-	index_buffer.max_index = 0xFFFFFFFF;
-#endif
 	index_buffer.size = size_bytes;
 	index_buffer.usage = (RDD::BUFFER_USAGE_TRANSFER_FROM_BIT | RDD::BUFFER_USAGE_TRANSFER_TO_BIT | RDD::BUFFER_USAGE_INDEX_BIT);
 	if (p_creation_bits.has_flag(BUFFER_CREATION_AS_STORAGE_BIT)) {
@@ -5140,7 +5147,7 @@ Error RenderingDevice::_raytracing_pipeline_create_sbt_buffer(RDD::RaytracingPip
 }
 
 RID RenderingDevice::raytracing_pipeline_create(Span<PipelineShader> p_raygen_shaders, Span<PipelineShader> p_miss_shaders, Span<HitGroup> p_hit_groups, uint32_t p_max_trace_recursion_depth) {
-	ERR_FAIL_COND_V_MSG(!has_feature(SUPPORTS_RAYTRACING_PIPELINE) && !has_feature(SUPPORTS_RAY_QUERY), RID(), "The current rendering device has neither raytracing pipeline nor ray query support.");
+	ERR_FAIL_COND_V_MSG(!has_feature(SUPPORTS_RAYTRACING_PIPELINE), RID(), "The current rendering device has no raytracing pipeline support.");
 
 	struct PipelineShaderKey : PipelineShader {
 		ShaderStage shader_stage = {};
@@ -6741,6 +6748,21 @@ void RenderingDevice::compute_list_bind_compute_pipeline(ComputeListID p_list, R
 #endif
 }
 
+void RenderingDevice::compute_list_add_buffer_read(ComputeListID p_list, RID p_buffer) {
+	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_COND(p_list != ID_TYPE_COMPUTE_LIST || !compute_list.active);
+
+	Buffer *buffer = _get_buffer_from_owner(p_buffer);
+	ERR_FAIL_NULL(buffer);
+	_check_transfer_worker_buffer(buffer);
+	if (!driver->api_trait_get(RDD::API_TRAIT_HONORS_PIPELINE_BARRIERS)) {
+		draw_graph.add_compute_list_use_buffer(buffer->driver_id);
+	}
+	if (buffer->draw_tracker != nullptr) {
+		draw_graph.add_compute_list_usage(buffer->draw_tracker, RDG::RESOURCE_USAGE_STORAGE_BUFFER_READ);
+	}
+}
+
 void RenderingDevice::compute_list_bind_uniform_set(ComputeListID p_list, RID p_uniform_set, uint32_t p_index) {
 	ERR_RENDER_THREAD_GUARD();
 
@@ -6754,6 +6776,17 @@ void RenderingDevice::compute_list_bind_uniform_set(ComputeListID p_list, RID p_
 
 	UniformSet *uniform_set = uniform_set_owner.get_or_null(p_uniform_set);
 	ERR_FAIL_NULL(uniform_set);
+
+	for (RID acceleration_structure_id : uniform_set->acceleration_structures) {
+		const AccelerationStructure *tlas = acceleration_structure_owner.get_or_null(acceleration_structure_id);
+		ERR_FAIL_NULL(tlas);
+		ERR_FAIL_COND_MSG(tlas->invalidated, "Acceleration structure needs to be built before use.");
+		for (RID blas_id : tlas->acceleration_structure_dependencies) {
+			const AccelerationStructure *blas = acceleration_structure_owner.get_or_null(blas_id);
+			ERR_FAIL_NULL(blas);
+			draw_graph.add_compute_list_usage(blas->draw_tracker, RDG::RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ);
+		}
+	}
 
 	if (p_index > compute_list.state.set_count) {
 		compute_list.state.set_count = p_index;

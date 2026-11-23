@@ -288,6 +288,7 @@ private:
 		STAGE_RENDER,
 		STAGE_COMPUTE,
 		STAGE_BLIT,
+		STAGE_ACCELERATION_STRUCTURE,
 		STAGE_MAX,
 	};
 	bool use_barriers = false;
@@ -458,6 +459,7 @@ public:
 		MDComputePipeline *pipeline = nullptr;
 		NS::SharedPtr<MTL::ComputeCommandEncoder> encoder;
 		ResourceTracker resource_tracker;
+		LocalVector<MTL::Resource *> physical_buffers;
 		// clang-format off
 		enum DirtyFlag: uint16_t {
 			DIRTY_NONE     = 0,
@@ -541,6 +543,8 @@ public:
 #pragma mark - Compute Commands
 
 	void compute_bind_uniform_sets(VectorView<RDD::UniformSetID> p_uniform_sets, RDD::ShaderID p_shader, uint32_t p_first_set_index, uint32_t p_set_count, uint32_t p_dynamic_offsets) override;
+	void build_acceleration_structure(MDAccelerationStructure &p_structure, MTL::Buffer *p_scratch, MTL::Buffer *p_instances, uint32_t p_instance_offset, uint32_t p_instance_count) override;
+	void compute_use_buffer(RDD::BufferID p_buffer) override;
 	void compute_dispatch(uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups) override;
 	void compute_dispatch_indirect(RDD::BufferID p_indirect_buffer, uint64_t p_offset) override;
 

@@ -165,6 +165,7 @@ protected:
 	virtual Error _create_device();
 	virtual void _track_resource(MTL::Resource *p_resource);
 	virtual void _untrack_resource(MTL::Resource *p_resource);
+	AccelerationStructureID _acceleration_structure_create(MTL::AccelerationStructureDescriptor *p_descriptor);
 	void _check_capabilities();
 	Error _initialize(uint32_t p_device_index, uint32_t p_frame_count);
 
@@ -452,6 +453,7 @@ public:
 	virtual void command_bind_compute_uniform_sets(CommandBufferID p_cmd_buffer, VectorView<UniformSetID> p_uniform_sets, ShaderID p_shader, uint32_t p_first_set_index, uint32_t p_set_count, uint32_t p_dynamic_offsets) override final;
 
 	// Dispatching.
+	virtual void command_compute_use_buffer(CommandBufferID p_cmd_buffer, BufferID p_buffer) override final;
 	virtual void command_compute_dispatch(CommandBufferID p_cmd_buffer, uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups) override final;
 	virtual void command_compute_dispatch_indirect(CommandBufferID p_cmd_buffer, BufferID p_indirect_buffer, uint64_t p_offset) override final;
 
@@ -465,6 +467,7 @@ public:
 
 	virtual AccelerationStructureID blas_create(VectorView<AccelerationStructureGeometry> p_geometries, BitField<AccelerationStructureFlagBits> p_flags) override final;
 	virtual AccelerationStructureID tlas_create(uint32_t p_max_instance_count, BitField<AccelerationStructureFlagBits> p_flags) override final;
+	virtual bool acceleration_structure_is_vertex_format_supported(DataFormat p_format) override final;
 	virtual void acceleration_structure_instance_write(uint8_t *r_driver_instance, const AccelerationStructureInstance &p_instance) override final;
 	virtual void acceleration_structure_free(AccelerationStructureID p_acceleration_structure) override final;
 	virtual uint32_t acceleration_structure_get_scratch_size_bytes(AccelerationStructureID p_acceleration_structure) override final;

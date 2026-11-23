@@ -852,6 +852,11 @@ void RenderingDeviceGraph::_run_compute_list_command(RDD::CommandBufferID p_comm
 				driver->command_bind_compute_uniform_sets(p_command_buffer, VectorView<RDD::UniformSetID>(bind_uniform_sets_instruction->uniform_set_ids(), bind_uniform_sets_instruction->set_count), bind_uniform_sets_instruction->shader, bind_uniform_sets_instruction->first_set_index, bind_uniform_sets_instruction->set_count, bind_uniform_sets_instruction->dynamic_offsets_mask);
 				instruction_data_cursor += sizeof(ComputeListBindUniformSetsInstruction) + sizeof(RDD::UniformSetID) * bind_uniform_sets_instruction->set_count;
 			} break;
+			case ComputeListInstruction::TYPE_USE_BUFFER: {
+				const ComputeListUseBufferInstruction *buffer_instruction = reinterpret_cast<const ComputeListUseBufferInstruction *>(instruction);
+				driver->command_compute_use_buffer(p_command_buffer, buffer_instruction->buffer);
+				instruction_data_cursor += sizeof(ComputeListUseBufferInstruction);
+			} break;
 			case ComputeListInstruction::TYPE_DISPATCH: {
 				const ComputeListDispatchInstruction *dispatch_instruction = reinterpret_cast<const ComputeListDispatchInstruction *>(instruction);
 				driver->command_compute_dispatch(p_command_buffer, dispatch_instruction->x_groups, dispatch_instruction->y_groups, dispatch_instruction->z_groups);
@@ -1682,6 +1687,11 @@ void RenderingDeviceGraph::_print_compute_list(const uint8_t *p_instruction_data
 				}
 				instruction_data_cursor += sizeof(ComputeListBindUniformSetsInstruction) + sizeof(RDD::UniformSetID) * bind_uniform_sets_instruction->set_count;
 			} break;
+			case ComputeListInstruction::TYPE_USE_BUFFER: {
+				const ComputeListUseBufferInstruction *buffer_instruction = reinterpret_cast<const ComputeListUseBufferInstruction *>(instruction);
+				print_line("\tUSE BUFFER ID", itos(buffer_instruction->buffer.id));
+				instruction_data_cursor += sizeof(ComputeListUseBufferInstruction);
+			} break;
 			case ComputeListInstruction::TYPE_DISPATCH: {
 				const ComputeListDispatchInstruction *dispatch_instruction = reinterpret_cast<const ComputeListDispatchInstruction *>(instruction);
 				print_line("\tDISPATCH", dispatch_instruction->x_groups, dispatch_instruction->y_groups, dispatch_instruction->z_groups);
@@ -2050,6 +2060,12 @@ void RenderingDeviceGraph::add_compute_list_bind_uniform_sets(RDD::ShaderID p_sh
 	for (uint32_t i = 0; i < p_set_count; i++) {
 		ids[i] = p_uniform_sets[i];
 	}
+}
+
+void RenderingDeviceGraph::add_compute_list_use_buffer(RDD::BufferID p_buffer) {
+	ComputeListUseBufferInstruction *instruction = static_cast<ComputeListUseBufferInstruction *>(_allocate_compute_list_instruction(sizeof(ComputeListUseBufferInstruction)));
+	instruction->type = ComputeListInstruction::TYPE_USE_BUFFER;
+	instruction->buffer = p_buffer;
 }
 
 void RenderingDeviceGraph::add_compute_list_dispatch(uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups) {

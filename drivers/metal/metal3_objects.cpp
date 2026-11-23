@@ -211,6 +211,11 @@ void MDCommandBuffer::pipeline_barrier(BitField<RDD::PipelineStageBits> p_src_st
 		pending_after_stages[STAGE_BLIT] |= after_stages;
 		pending_before_queue_stages[STAGE_BLIT] |= before_stages;
 	}
+
+	if (before_stages & MTL::StageAccelerationStructure) {
+		pending_after_stages[STAGE_ACCELERATION_STRUCTURE] |= after_stages;
+		pending_before_queue_stages[STAGE_ACCELERATION_STRUCTURE] |= before_stages;
+	}
 }
 
 void MDCommandBuffer::bind_pipeline(RDD::PipelineID p_pipeline) {
@@ -1392,8 +1397,12 @@ void MDCommandBuffer::_compute_set_dirty_state() {
 
 	if (!use_barriers) {
 		compute.resource_tracker.encode(compute.encoder.get());
+		if (!compute.physical_buffers.is_empty()) {
+			compute.encoder->useResources(compute.physical_buffers.ptr(), compute.physical_buffers.size(), MTL::ResourceUsageRead);
+		}
 	}
 
+	compute.physical_buffers.clear();
 	compute.dirty.clear();
 }
 
@@ -1436,6 +1445,7 @@ void MDCommandBuffer::ComputeState::reset() {
 	dynamic_offsets = 0;
 	uniform_set_mask = 0;
 	resource_tracker.reset();
+	physical_buffers.clear();
 }
 
 void MDCommandBuffer::compute_bind_uniform_sets(VectorView<RDD::UniformSetID> p_uniform_sets, RDD::ShaderID p_shader, uint32_t p_first_set_index, uint32_t p_set_count, uint32_t p_dynamic_offsets) {
@@ -1473,6 +1483,39 @@ void MDCommandBuffer::compute_bind_uniform_sets(VectorView<RDD::UniformSetID> p_
 			compute.uniform_sets[index] = set;
 		}
 	}
+}
+
+void MDCommandBuffer::build_acceleration_structure(MDAccelerationStructure &p_structure, MTL::Buffer *p_scratch, MTL::Buffer *p_instances, uint32_t p_instance_offset, uint32_t p_instance_count) {
+	end();
+
+	if (p_instances) {
+		auto *descriptor = static_cast<MTL::IndirectInstanceAccelerationStructureDescriptor *>(p_structure.descriptor.get());
+		const Alloc count = _scratch.allocate(sizeof(uint32_t));
+		memcpy(count.ptr, &p_instance_count, sizeof(p_instance_count));
+		descriptor->setMaxInstanceCount(p_instance_count);
+		descriptor->setInstanceDescriptorBuffer(p_instances);
+		descriptor->setInstanceDescriptorBufferOffset(p_instance_count ? p_instance_offset : 0);
+		descriptor->setInstanceCountBuffer(count.buffer);
+		descriptor->setInstanceCountBufferOffset(count.offset);
+	}
+
+	MTL::AccelerationStructureCommandEncoder *encoder = command_buffer()->accelerationStructureCommandEncoder();
+	if (use_barriers) {
+		if (pending_before_queue_stages[STAGE_ACCELERATION_STRUCTURE] != 0) {
+			encoder->barrierAfterQueueStages(pending_after_stages[STAGE_ACCELERATION_STRUCTURE], pending_before_queue_stages[STAGE_ACCELERATION_STRUCTURE]);
+			pending_after_stages[STAGE_ACCELERATION_STRUCTURE] = 0;
+			pending_before_queue_stages[STAGE_ACCELERATION_STRUCTURE] = 0;
+		}
+	} else if (!p_structure.bottom_level_resources.is_empty()) {
+		encoder->useResources(p_structure.bottom_level_resources.ptr(), p_structure.bottom_level_resources.size(), MTL::ResourceUsageRead);
+	}
+	encoder->buildAccelerationStructure(p_structure.resource.get(), p_structure.descriptor.get(), p_scratch, 0);
+	encoder->endEncoding();
+}
+
+void MDCommandBuffer::compute_use_buffer(RDD::BufferID p_buffer) {
+	const auto *buffer = (const RDM::BufferInfo *)p_buffer.id;
+	compute.physical_buffers.push_back(buffer->metal_buffer.get());
 }
 
 void MDCommandBuffer::compute_dispatch(uint32_t p_x_groups, uint32_t p_y_groups, uint32_t p_z_groups) {
@@ -1744,6 +1787,15 @@ void MDCommandBuffer::_bind_uniforms_direct(MDUniformSet *p_set, MDShader *p_sha
 				const MetalBufferDynamicInfo *buf_info = (const MetalBufferDynamicInfo *)uniform.ids[0].id;
 				p_enc.set(buf_info->metal_buffer.get(), frame_idx * buf_info->size_bytes, indexes.buffer);
 			} break;
+			case RDD::UNIFORM_TYPE_ACCELERATION_STRUCTURE: {
+				ERR_FAIL_COND(p_enc.mode != DirectEncoder::COMPUTE);
+				const auto *structure = (const MDAccelerationStructure *)uniform.ids[0].id;
+				auto *encoder = static_cast<MTL::ComputeCommandEncoder *>(p_enc.encoder);
+				encoder->setAccelerationStructure(structure->resource.get(), indexes.buffer);
+				if (!use_barriers && !structure->bottom_level_resources.is_empty()) {
+					encoder->useResources(structure->bottom_level_resources.ptr(), structure->bottom_level_resources.size(), MTL::ResourceUsageRead);
+				}
+			} break;
 			case RDD::UNIFORM_TYPE_INPUT_ATTACHMENT: {
 				size_t count = uniform.ids.size();
 				MTL::Texture **objects = ALLOCA_ARRAY(MTL::Texture *, count);
@@ -1766,6 +1818,16 @@ void MDCommandBuffer::_bind_uniforms_argument_buffers_compute(MDUniformSet *p_se
 
 	MTL::ComputeCommandEncoder *enc = compute.encoder.get();
 	compute.resource_tracker.merge_from(p_set->usage_to_resources);
+	if (!use_barriers) {
+		for (const RDD::BoundUniform &uniform : p_set->uniforms) {
+			if (uniform.type == RDD::UNIFORM_TYPE_ACCELERATION_STRUCTURE) {
+				const auto *structure = (const MDAccelerationStructure *)uniform.ids[0].id;
+				if (!structure->bottom_level_resources.is_empty()) {
+					enc->useResources(structure->bottom_level_resources.ptr(), structure->bottom_level_resources.size(), MTL::ResourceUsageRead);
+				}
+			}
+		}
+	}
 
 	const UniformSet &shader_set = p_shader->sets[p_set_index];
 

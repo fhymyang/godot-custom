@@ -130,6 +130,7 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 		// Raytracing extensions.
 		PFN_vkCreateAccelerationStructureKHR CreateAccelerationStructureKHR = nullptr;
 		PFN_vkDestroyAccelerationStructureKHR DestroyAccelerationStructureKHR = nullptr;
+		PFN_vkGetAccelerationStructureDeviceAddressKHR GetAccelerationStructureDeviceAddressKHR = nullptr;
 		PFN_vkGetAccelerationStructureBuildSizesKHR GetAccelerationStructureBuildSizesKHR = nullptr;
 		PFN_vkCmdBuildAccelerationStructuresKHR CmdBuildAccelerationStructuresKHR = nullptr;
 		PFN_vkCreateRayTracingPipelinesKHR CreateRaytracingPipelinesKHR = nullptr;
@@ -310,6 +311,7 @@ public:
 public:
 	virtual SamplerID sampler_create(const SamplerState &p_state) final override;
 	virtual void sampler_free(SamplerID p_sampler) final override;
+	virtual bool acceleration_structure_is_vertex_format_supported(DataFormat p_format) override final;
 	virtual bool sampler_is_format_supported_for_filter(DataFormat p_format, SamplerFilter p_filter) override final;
 
 	/**********************/
@@ -705,6 +707,7 @@ public:
 
 	struct AccelerationStructureInfo {
 		VkAccelerationStructureKHR vk_acceleration_structure = VK_NULL_HANDLE;
+		VkDeviceAddress device_address = 0;
 		// Buffer used for the structure
 		RDD::BufferID buffer;
 
@@ -726,7 +729,7 @@ public:
 	virtual uint32_t acceleration_structure_get_scratch_size_bytes(AccelerationStructureID p_acceleration_structure) override final;
 
 private:
-	void _acceleration_structure_create(VkAccelerationStructureTypeKHR p_type, VkAccelerationStructureBuildSizesInfoKHR p_size_info, AccelerationStructureInfo *r_accel_info);
+	bool _acceleration_structure_create(VkAccelerationStructureTypeKHR p_type, VkAccelerationStructureBuildSizesInfoKHR p_size_info, AccelerationStructureInfo *r_accel_info);
 
 private:
 	VkStridedDeviceAddressRegionKHR _sbt_to_vk_strided_device_address_region(const ShaderBindingTable &p_sbt);

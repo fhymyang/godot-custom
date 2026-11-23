@@ -265,6 +265,9 @@ MetalDeviceProfile::MinimumRequirements RenderingShaderContainerMetal::inspect_s
 			spv::Op opcode = static_cast<spv::Op>(instruction & 0xFFFF);
 			if (opcode == spv::OpImageTexelPointer) {
 				atomic_image_ids.insert(words[3]);
+			} else if (opcode == spv::OpCapability && words[1] == spv::CapabilityRayQueryKHR) {
+				reqs.gpu = MAX(reqs.gpu, MetalDeviceProfile::GPU::Apple6);
+				reqs.msl_version = MAX(reqs.msl_version, MSL_VERSION_31);
 			}
 			words += word_count;
 		}
@@ -556,6 +559,15 @@ bool RenderingShaderContainerMetal::_set_code_from_spirv(const ReflectShader &p_
 						found->get_indexes(UniformData::IndexType::SLOT).buffer = next_index(Buffer, binding_stride);
 						found->get_indexes(UniformData::IndexType::ARG).buffer = next_arg_index(binding_stride);
 						rb.basetype = SPIRType::BaseType::Void;
+					} break;
+					case RDC::UNIFORM_TYPE_ACCELERATION_STRUCTURE: {
+						ERR_FAIL_COND_V_MSG(uniform.stages != RDC::SHADER_STAGE_COMPUTE_BIT, false, "Metal acceleration structure bindings require a compute shader.");
+						found->data_type = MTL::DataTypeInstanceAccelerationStructure;
+						found->get_indexes(UniformData::IndexType::SLOT).buffer = next_index(Buffer, binding_stride);
+						found->get_indexes(UniformData::IndexType::ARG).buffer = next_arg_index(binding_stride);
+						// SPIRV-Cross uses this only for padding unused argument slots.
+						// Both a buffer pointer and a Metal acceleration structure ID occupy one slot.
+						rb.basetype = SPIRType::Void;
 					} break;
 					case RDC::UNIFORM_TYPE_INPUT_ATTACHMENT: {
 						found->data_type = MTL::DataTypeTexture;
