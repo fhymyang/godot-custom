@@ -445,6 +445,50 @@ void main() {
 #endif
 
 #ifdef MODE_RESOLVE
+// Validate each bilinear tap before mixing colors across a silhouette.
+vec4 gather_history(vec2 uv, vec3 receiver, vec3 normal) {
+	vec2 grid = (uv * vec2(scene.size) - 0.5) * 0.5;
+	ivec2 base = ivec2(floor(grid));
+	vec2 fraction = fract(grid);
+	float max_distance = max(0.05, length(receiver) * 0.025);
+	float max_plane_distance = max(0.02, length(receiver) * 0.005);
+	vec4 history = vec4(0.0);
+	float support = 0.0;
+	for (int y = 0; y < 2; y++) {
+		for (int x = 0; x < 2; x++) {
+			ivec2 pixel = base + ivec2(x, y);
+			float weight = (x == 0 ? 1.0 - fraction.x : fraction.x) * (y == 0 ? 1.0 - fraction.y : fraction.y);
+			if (weight < 0.0001 || !in_bounds(pixel, scene.half_size)) {
+				continue;
+			}
+#ifdef MONTE_CARLO
+			uvec4 previous = previous_receivers[reservoir_index(pixel)];
+			vec3 position = uintBitsToFloat(previous.xyz);
+			uint encoded_normal = previous.w;
+			bool valid = any(notEqual(previous.xyz, uvec3(0u)));
+#else
+			Reservoir previous = previous_receivers[reservoir_index(pixel)];
+			vec3 position = previous.receiver.xyz;
+			uint encoded_normal = previous.attributes.x;
+			bool valid = previous.receiver.w > 0.0;
+#endif
+			vec3 delta = position - (receiver + scene.camera_offset.xyz);
+			if (!valid || dot(delta, delta) > max_distance * max_distance || abs(dot(normal, delta)) > max_plane_distance) {
+				continue;
+			}
+			weight *= smoothstep(0.88, 0.97, dot(normal, decode_normal(encoded_normal)));
+			history += weight * texelFetch(previous_lighting, pixel, 0);
+			support += weight;
+		}
+	}
+	if (support < 0.25) {
+		return vec4(0.0);
+	}
+	history.rgb /= support;
+	// Partial coverage shortens the effective history at disocclusions.
+	return history;
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (!in_bounds(pixel, scene.size)) {
@@ -479,34 +523,26 @@ void main() {
 		}
 	}
 	light /= max(total_weight, 0.001);
+	float frames = total_weight > 0.001 ? 1.0 : 0.0;
 	if (scene.history_valid != 0u && total_weight > 0.001) {
 		vec3 previous_position = receiver + scene.camera_offset.xyz;
 		vec4 clip = scene.previous_world_to_clip * vec4(previous_position, 1.0);
 		if (clip.w > 0.0 && clip.z > 0.0 && clip.z <= clip.w) {
 			vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
-			ivec2 previous_pixel = ivec2(floor(uv * vec2(scene.size) * 0.5));
-			if (in_bounds(previous_pixel, scene.half_size) && all(lessThan(uv, vec2(1.0)))) {
-#ifdef MONTE_CARLO
-				uvec4 previous = previous_receivers[reservoir_index(previous_pixel)];
-				vec3 delta = uintBitsToFloat(previous.xyz) - previous_position;
-				bool compatible_surface = any(notEqual(previous.xyz, uvec3(0u))) && dot(normal, decode_normal(previous.w)) > 0.9;
-#else
-				Reservoir previous = previous_receivers[reservoir_index(previous_pixel)];
-				vec3 delta = previous.receiver.xyz - previous_position;
-				bool compatible_surface = previous.receiver.w > 0.0 && dot(normal, decode_normal(previous.attributes.x)) > 0.9;
-#endif
-				if (compatible_surface &&
-						length(delta) < max(0.05, length(receiver) * 0.025) &&
-						abs(dot(normal, delta)) < max(0.02, length(receiver) * 0.005)) {
-					vec3 deviation = sqrt(max(second_moment / total_weight - light * light, vec3(0.0)));
-					vec3 history = texelFetch(previous_lighting, previous_pixel, 0).rgb;
-					light = mix(light, clamp(history, light - deviation, light + deviation), 0.75);
-				}
+			if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+				vec4 history = gather_history(uv, receiver, normal);
+				vec3 deviation = sqrt(max(second_moment / total_weight - light * light, vec3(0.0)));
+				vec3 clipped = clamp(history.rgb, light - deviation * 1.5, light + deviation * 1.5);
+				// Reduce persistence when lighting moves outside the current neighborhood.
+				float change = length(history.rgb - clipped) / max(length(deviation) + length(light) * 0.1, 0.001);
+				float retained = min(history.a, 11.0) / (1.0 + change * change);
+				frames += retained;
+				light = mix(light, clipped, retained / frames);
 			}
 		}
 	}
 	if (all(equal(pixel, receiver_pixel(pixel / 2)))) {
-		imageStore(filtered_history, pixel / 2, vec4(light, 0.0));
+		imageStore(filtered_history, pixel / 2, vec4(light, frames));
 	}
 	imageStore(lighting, pixel, vec4(light * scene.intensity, 0.0));
 }
