@@ -64,6 +64,7 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	uses_alpha_antialiasing = false;
 	uses_blend_alpha = false;
 	uses_depth_prepass_alpha = false;
+	uses_hybrid_reflections = false;
 	uses_discard = false;
 	uses_roughness = false;
 	uses_normal = false;
@@ -129,6 +130,7 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	actions.usage_flag_pointers["ALPHA_ANTIALIASING_EDGE"] = &uses_alpha_antialiasing;
 	actions.usage_flag_pointers["ALPHA_TEXTURE_COORDINATE"] = &uses_alpha_antialiasing;
 	actions.render_mode_flags["depth_prepass_alpha"] = &uses_depth_prepass_alpha;
+	actions.render_mode_flags["hybrid_reflections"] = &uses_hybrid_reflections;
 
 	actions.usage_flag_pointers["SSS_STRENGTH"] = &uses_sss;
 	actions.usage_flag_pointers["SSS_TRANSMITTANCE_DEPTH"] = &uses_transmittance;
@@ -284,6 +286,10 @@ uint16_t SceneShaderForwardClustered::ShaderData::_get_shader_version(PipelineVe
 			return ShaderVersion::SHADER_VERSION_DEPTH_PASS + ubershader_base;
 		case PIPELINE_VERSION_DEPTH_PASS_DP:
 			return ShaderVersion::SHADER_VERSION_DEPTH_PASS_DP + ubershader_base;
+		case PIPELINE_VERSION_REFLECTION_SURFACE:
+			return ShaderVersion::SHADER_VERSION_REFLECTION_SURFACE + ubershader_base;
+		case PIPELINE_VERSION_REFLECTION_SURFACE_MULTIVIEW:
+			return ShaderVersion::SHADER_VERSION_REFLECTION_SURFACE_MULTIVIEW + ubershader_base;
 		case PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS:
 			return ShaderVersion::SHADER_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS + ubershader_base;
 		case PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI:
@@ -461,6 +467,13 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 		}
 	} else {
 		switch (p_pipeline_key.version) {
+			case PIPELINE_VERSION_REFLECTION_SURFACE:
+			case PIPELINE_VERSION_REFLECTION_SURFACE_MULTIVIEW:
+				depth_stencil_state.enable_depth_test = true;
+				depth_stencil_state.enable_depth_write = true;
+				depth_stencil_state.depth_compare_operator = RD::COMPARE_OP_GREATER_OR_EQUAL;
+				blend_state = blend_state_depth_normal_roughness;
+				break;
 			case PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS:
 			case PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW:
 				blend_state = blend_state_depth_normal_roughness;
@@ -666,6 +679,8 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED_MULTIVIEW, base_define + "\n#define USE_MULTIVIEW\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_RENDER_VOXEL_GI\n", false)); // SHADER_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW
 			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_MATERIAL\n", false)); // SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL
 			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_SDF\n", false)); // SHADER_VERSION_DEPTH_PASS_WITH_SDF
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_REFLECTION, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_REFLECTION_SURFACE\n", false));
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_REFLECTION_MULTIVIEW, base_define + "\n#define USE_MULTIVIEW\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_REFLECTION_SURFACE\n", false));
 		}
 
 		Vector<String> color_pass_flags = {
@@ -786,6 +801,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["DEPTH"] = "gl_FragDepth";
 		actions.renames["FOG"] = "fog";
 		actions.renames["RADIANCE"] = "custom_radiance";
+		actions.renames["HYBRID_REFLECTION"] = "hybrid_reflection";
 		actions.renames["IRRADIANCE"] = "custom_irradiance";
 		actions.renames["BONE_INDICES"] = "bone_attrib";
 		actions.renames["BONE_WEIGHTS"] = "weight_attrib";
@@ -864,6 +880,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 
 		actions.usage_defines["FOG"] = "#define CUSTOM_FOG_USED\n";
 		actions.usage_defines["RADIANCE"] = "#define CUSTOM_RADIANCE_USED\n";
+		actions.usage_defines["HYBRID_REFLECTION"] = "#define HYBRID_REFLECTION_USED\n";
 		actions.usage_defines["IRRADIANCE"] = "#define CUSTOM_IRRADIANCE_USED\n";
 
 		actions.usage_defines["MODEL_MATRIX"] = "#define MODEL_MATRIX_USED\n";
@@ -878,6 +895,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.render_mode_defines["cull_disabled"] = "#define DO_SIDE_CHECK\n";
 		actions.render_mode_defines["particle_trails"] = "#define USE_PARTICLE_TRAILS\n";
 		actions.render_mode_defines["depth_prepass_alpha"] = "#define USE_OPAQUE_PREPASS\n";
+		actions.render_mode_defines["hybrid_reflections"] = "#define USE_HYBRID_REFLECTIONS\n";
 
 		bool force_lambert = GLOBAL_GET("rendering/shading/overrides/force_lambert_over_burley");
 

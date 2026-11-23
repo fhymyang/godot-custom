@@ -192,6 +192,7 @@ ShaderTypes::ShaderTypes() {
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["VIEWPORT_SIZE"] = constt(ShaderLanguage::TYPE_VEC2);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["FOG"] = ShaderLanguage::TYPE_VEC4; // TODO consider adding to light shader
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["RADIANCE"] = ShaderLanguage::TYPE_VEC4;
+	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["HYBRID_REFLECTION"] = constt(ShaderLanguage::TYPE_VEC4);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["IRRADIANCE"] = ShaderLanguage::TYPE_VEC4;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].can_discard = true;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].main_function = true;
@@ -238,6 +239,7 @@ ShaderTypes::ShaderTypes() {
 		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("blend"), "mix", "add", "sub", "mul", "premul_alpha" });
 		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("depth_draw"), "opaque", "always", "never" });
 		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("depth_prepass_alpha") });
+		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("hybrid_reflections") });
 		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("depth_test"), { "default", "disabled", "inverted" } });
 		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("sss_mode_skin") });
 		shader_modes[RSE::SHADER_SPATIAL].modes.push_back({ PNAME("cull"), "back", "front", "disabled" });

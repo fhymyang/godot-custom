@@ -714,6 +714,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["DEPTH"] = "gl_FragDepth";
 		actions.renames["FOG"] = "fog_highp";
 		actions.renames["RADIANCE"] = "custom_radiance_highp";
+		actions.renames["HYBRID_REFLECTION"] = "vec4(0.0, 0.0, 0.0, -1.0)";
 		actions.renames["IRRADIANCE"] = "custom_irradiance_highp";
 		actions.renames["BONE_INDICES"] = "bone_attrib";
 		actions.renames["BONE_WEIGHTS"] = "weight_attrib";

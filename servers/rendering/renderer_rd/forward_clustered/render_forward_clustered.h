@@ -34,6 +34,7 @@
 #include "servers/rendering/multi_uma_buffer.h"
 #include "servers/rendering/renderer_rd/cluster_builder_rd.h"
 #include "servers/rendering/renderer_rd/effects/fsr2.h"
+#include "servers/rendering/renderer_rd/effects/hybrid_reflections.h"
 #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
 #include "servers/rendering/renderer_rd/effects/restir_gi.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
@@ -82,6 +83,7 @@ class RenderForwardClustered : public RendererSceneRenderRD {
 		RENDER_LIST_MOTION, //used for opaque objects with motion
 		RENDER_LIST_ALPHA, //used for transparent objects
 		RENDER_LIST_SECONDARY, //used for shadows and other objects
+		RENDER_LIST_REFLECTION, // transparent reflection surfaces
 		RENDER_LIST_MAX
 	};
 
@@ -118,6 +120,7 @@ public:
 		} ss_effects_data;
 
 		RendererRD::RestirGI::RenderBuffers restir_gi_buffers;
+		RendererRD::HybridReflections::RenderBuffers hybrid_reflection_buffers;
 		RendererRD::TemporalDirectionalShadow::History directional_shadow_history;
 
 		enum DepthFrameBufferType {
@@ -181,7 +184,7 @@ private:
 
 	void _update_render_base_uniform_set();
 	RID _setup_sdfgi_render_pass_uniform_set(RID p_albedo_texture, RID p_emission_texture, RID p_emission_aniso_texture, RID p_geom_facing_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index);
-	RID _setup_render_pass_uniform_set(RenderListType p_render_list, const RenderDataRD *p_render_data, RID p_radiance_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index, bool p_use_directional_shadow_atlas = false);
+	RID _setup_render_pass_uniform_set(RenderListType p_render_list, const RenderDataRD *p_render_data, RID p_radiance_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index, bool p_use_directional_shadow_atlas = false, bool p_use_hybrid_reflections = false);
 
 	struct BestFitNormal {
 		BestFitNormalShaderRD shader;
@@ -208,6 +211,7 @@ private:
 		PASS_MODE_SHADOW_DP,
 		PASS_MODE_DEPTH,
 		PASS_MODE_DEPTH_NORMAL_ROUGHNESS,
+		PASS_MODE_REFLECTION_SURFACE,
 		PASS_MODE_DEPTH_NORMAL_ROUGHNESS_VOXEL_GI,
 		PASS_MODE_DEPTH_MATERIAL,
 		PASS_MODE_SDF,
@@ -411,7 +415,7 @@ private:
 		uint32_t max_lightmaps;
 		RID lightmap_buffer;
 
-		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY") };
+		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY"), MultiUmaBuffer<1u>("RENDER_LIST_REFLECTION") };
 		InstanceData *curr_gpu_ptr[RENDER_LIST_MAX] = {};
 
 		LightmapCaptureData *lightmap_captures = nullptr;
@@ -452,7 +456,7 @@ private:
 
 	static RenderForwardClustered *singleton;
 
-	uint32_t _setup_environment(const RenderDataRD *p_render_data, bool p_no_fog, const Size2i &p_screen_size, const Size2 &p_viewport_size, const Color &p_default_bg_color, bool p_opaque_render_buffers = false, bool p_apply_alpha_multiplier = false, bool p_pancake_shadows = false);
+	uint32_t _setup_environment(const RenderDataRD *p_render_data, bool p_no_fog, const Size2i &p_screen_size, const Size2 &p_viewport_size, const Color &p_default_bg_color, bool p_opaque_render_buffers = false, bool p_apply_alpha_multiplier = false, bool p_pancake_shadows = false, bool p_use_hybrid_reflections = false);
 	void _setup_voxelgis(const PagedArray<RID> &p_voxelgis);
 	void _setup_lightmaps(const RenderDataRD *p_render_data, const PagedArray<RID> &p_lightmaps, const Transform3D &p_cam_transform);
 
@@ -753,6 +757,8 @@ private:
 	RendererRD::FSR2Effect *fsr2_effect = nullptr;
 	RendererRD::SSEffects *ss_effects = nullptr;
 	RendererRD::RestirGI *restir_gi = nullptr;
+	RendererRD::HybridReflections *hybrid_reflections = nullptr;
+	bool hybrid_reflections_enabled = false;
 
 #ifdef METAL_MFXTEMPORAL_ENABLED
 	RendererRD::MFXTemporalEffect *mfx_temporal_effect = nullptr;
@@ -782,6 +788,7 @@ private:
 
 	/* Render Scene */
 	void _process_ssao(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections);
+	bool _process_hybrid_reflections(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, uint32_t p_uniform_index, bool p_reverse_cull, const RendererRD::MaterialStorage::Samplers &p_samplers);
 	bool _process_restir_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals);
 	void _process_ssil(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections, const Transform3D &p_transform);
 	void _process_ssr(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_slices, const Projection *p_projections, const Vector3 *p_eye_offsets, const Transform3D &p_transform);
@@ -800,6 +807,7 @@ protected:
 
 	virtual void environment_set_ssao_quality(RSE::EnvironmentSSAOQuality p_quality, bool p_half_size, float p_adaptive_target, int p_blur_passes, float p_fadeout_from, float p_fadeout_to) override;
 	virtual bool supports_restir_gi() const override;
+	virtual bool uses_hybrid_reflections() const override { return hybrid_reflections_enabled; }
 	virtual void environment_set_ssil_quality(RSE::EnvironmentSSILQuality p_quality, bool p_half_size, float p_adaptive_target, int p_blur_passes, float p_fadeout_from, float p_fadeout_to) override;
 	virtual void environment_set_ssr_half_size(bool p_half_size) override;
 	virtual void environment_set_ssr_roughness_quality(RSE::EnvironmentSSRRoughnessQuality p_quality) override;

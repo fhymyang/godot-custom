@@ -48,6 +48,8 @@ public:
 		SHADER_GROUP_ADVANCED,
 		SHADER_GROUP_MULTIVIEW,
 		SHADER_GROUP_ADVANCED_MULTIVIEW,
+		SHADER_GROUP_REFLECTION,
+		SHADER_GROUP_REFLECTION_MULTIVIEW,
 	};
 
 	// Not an enum because these values are constants that are processed as numbers
@@ -62,7 +64,9 @@ public:
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW = 6;
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL = 7;
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_SDF = 8;
-		constexpr static uint16_t SHADER_VERSION_COLOR_PASS = 9;
+		constexpr static uint16_t SHADER_VERSION_REFLECTION_SURFACE = 9;
+		constexpr static uint16_t SHADER_VERSION_REFLECTION_SURFACE_MULTIVIEW = 10;
+		constexpr static uint16_t SHADER_VERSION_COLOR_PASS = 11;
 	};
 
 	enum ShaderColorPassFlags {
@@ -84,6 +88,8 @@ public:
 		PIPELINE_VERSION_DEPTH_PASS_MULTIVIEW,
 		PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW,
 		PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW,
+		PIPELINE_VERSION_REFLECTION_SURFACE,
+		PIPELINE_VERSION_REFLECTION_SURFACE_MULTIVIEW,
 		PIPELINE_VERSION_COLOR_PASS,
 		PIPELINE_VERSION_MAX
 	};
@@ -244,6 +250,7 @@ public:
 		bool uses_alpha_clip = false;
 		bool uses_alpha_antialiasing = false;
 		bool uses_depth_prepass_alpha = false;
+		bool uses_hybrid_reflections = false;
 		bool uses_discard = false;
 		bool uses_roughness = false;
 		bool uses_normal = false;

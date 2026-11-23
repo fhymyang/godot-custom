@@ -1328,6 +1328,7 @@ MaterialStorage::MaterialStorage() {
 		actions.renames["DEPTH"] = "gl_FragDepth";
 		actions.renames["FOG"] = "fog";
 		actions.renames["RADIANCE"] = "custom_radiance";
+		actions.renames["HYBRID_REFLECTION"] = "vec4(0.0, 0.0, 0.0, -1.0)";
 		actions.renames["IRRADIANCE"] = "custom_irradiance";
 		actions.renames["BONE_INDICES"] = "bone_attrib";
 		actions.renames["BONE_WEIGHTS"] = "weight_attrib";

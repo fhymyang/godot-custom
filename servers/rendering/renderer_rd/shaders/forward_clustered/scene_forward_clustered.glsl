@@ -1293,6 +1293,24 @@ void fragment_shader(in SceneData scene_data) {
 
 	vec2 screen_uv = gl_FragCoord.xy * scene_data.screen_pixel_size;
 
+#ifdef HYBRID_REFLECTION_USED
+	vec4 hybrid_reflection = vec4(0.0, 0.0, 0.0, -1.0);
+#if defined(USE_HYBRID_REFLECTIONS) && !defined(MODE_RENDER_DEPTH)
+	if (bool(implementation_data.ss_effects_flags & SCREEN_SPACE_EFFECTS_FLAGS_USE_HYBRID_REFLECTIONS)) {
+		ivec2 pixel = ivec2(gl_FragCoord.xy);
+#ifdef USE_MULTIVIEW
+		float surface_depth = texelFetch(sampler2DArray(ssr_mip_level_buffer, SAMPLER_NEAREST_CLAMP), ivec3(pixel, ViewIndex), 0).r;
+		vec4 reflection_sample = texelFetch(sampler2DArray(ssr_buffer, SAMPLER_NEAREST_CLAMP), ivec3(pixel, ViewIndex), 0);
+#else
+		float surface_depth = texelFetch(sampler2D(ssr_mip_level_buffer, SAMPLER_NEAREST_CLAMP), pixel, 0).r;
+		vec4 reflection_sample = texelFetch(sampler2D(ssr_buffer, SAMPLER_NEAREST_CLAMP), pixel, 0);
+#endif
+		// A buffer hit belongs to the nearest participating transparent surface.
+		hybrid_reflection = surface_depth > 0.0 && abs(surface_depth - gl_FragCoord.z) < 0.000005 ? reflection_sample : vec4(0.0);
+	}
+#endif
+#endif
+
 	float sss_strength = 0.0;
 
 #ifdef ALPHA_SCISSOR_USED
@@ -3032,6 +3050,11 @@ void fragment_shader(in SceneData scene_data) {
 #endif
 
 #ifdef MODE_RENDER_NORMAL_ROUGHNESS
+#ifdef MODE_REFLECTION_SURFACE
+	if (alpha <= 0.0) {
+		discard;
+	}
+#endif
 	normal_roughness_output_buffer = vec4(encode24(normal) * 0.5 + 0.5, roughness);
 
 	// We encode the dynamic static into roughness.
