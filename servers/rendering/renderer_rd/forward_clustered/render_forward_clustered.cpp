@@ -116,6 +116,8 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
 		render_buffers->clear_context(RB_SCOPE_SSDS);
 		render_buffers->clear_context(RB_SCOPE_SSIL);
 		render_buffers->clear_context(RB_SCOPE_RESTIR_GI);
+		render_buffers->clear_context(SNAME("temporal_directional_shadow"));
+		directional_shadow_history = {};
 		restir_gi_buffers.clear();
 		render_buffers->clear_context(RB_SCOPE_SSAO);
 		render_buffers->clear_context(RB_SCOPE_SSR);
@@ -2057,9 +2059,16 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	RD::get_singleton()->draw_command_end_label();
 
+	const bool using_temporal_shadows = temporal_directional_shadow && rb_data.is_valid() && !is_reflection_probe &&
+			rb->get_use_taa() && rb->get_view_count() == 1 &&
+			(!p_render_data->render_region.has_area() || p_render_data->render_region == Rect2i(Point2i(), screen_size)) &&
+			get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_PSSM_SPLITS;
+
 	if (!is_reflection_probe) {
 		if (using_voxelgi) {
 			depth_pass_mode = PASS_MODE_DEPTH_NORMAL_ROUGHNESS_VOXEL_GI;
+		} else if (using_temporal_shadows) {
+			depth_pass_mode = PASS_MODE_DEPTH_NORMAL_ROUGHNESS;
 		} else if (p_render_data->environment.is_valid()) {
 			if (using_ssr ||
 					using_sdfgi ||
@@ -2331,6 +2340,15 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	_update_render_base_uniform_set();
 
 	uint32_t opaque_pass_uniform_buffer_index = _setup_environment(p_render_data, is_reflection_probe, screen_size, screen_size, p_default_bg_color, true, using_motion_pass);
+
+	if (using_temporal_shadows && depth_pre_pass && normal_roughness_views[0].is_valid()) {
+		RENDER_TIMESTAMP("Temporal Directional Shadows");
+		RD::get_singleton()->draw_command_begin_label("Temporal Directional Shadows");
+		temporal_directional_shadow->render(**rb, scene_state.uniform_buffers[opaque_pass_uniform_buffer_index], normal_roughness_views[0], scene_shader.shadow_sampler, rb_data->directional_shadow_history);
+		RD::get_singleton()->draw_command_end_label();
+	} else if (rb_data.is_valid()) {
+		rb_data->directional_shadow_history = {};
+	}
 
 	RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
 
@@ -3910,6 +3928,17 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		uniforms.push_back(u);
 	}
 
+	{
+		RID shadow_visibility;
+		if (p_use_directional_shadow_atlas && rb_data.is_valid() && p_render_list != RENDER_LIST_ALPHA) {
+			shadow_visibility = rb_data->directional_shadow_history.texture;
+		}
+		if (shadow_visibility.is_null()) {
+			shadow_visibility = texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_BLACK);
+		}
+		uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_TEXTURE, 37, { shadow_visibility }));
+	}
+
 	return UniformSetCacheRD::get_singleton()->get_cache_vec(scene_shader.default_shader_rd, RENDER_PASS_UNIFORM_SET, uniforms);
 }
 
@@ -5388,6 +5417,9 @@ RenderForwardClustered::RenderForwardClustered() {
 	_update_global_pipeline_data_requirements_from_project();
 
 	taa = memnew(RendererRD::TAA);
+	if (GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/temporal_filter")) {
+		temporal_directional_shadow = memnew(RendererRD::TemporalDirectionalShadow);
+	}
 	fsr2_effect = memnew(RendererRD::FSR2Effect);
 	ss_effects = memnew(RendererRD::SSEffects);
 #ifdef METAL_MFXTEMPORAL_ENABLED
@@ -5397,6 +5429,9 @@ RenderForwardClustered::RenderForwardClustered() {
 }
 
 RenderForwardClustered::~RenderForwardClustered() {
+	if (temporal_directional_shadow) {
+		memdelete(temporal_directional_shadow);
+	}
 	if (restir_gi) {
 		memdelete(restir_gi);
 	}

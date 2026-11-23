@@ -38,6 +38,7 @@
 #include "servers/rendering/renderer_rd/effects/restir_gi.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
 #include "servers/rendering/renderer_rd/effects/taa.h"
+#include "servers/rendering/renderer_rd/effects/temporal_directional_shadow.h"
 #include "servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/best_fit_normal.glsl.gen.h"
@@ -117,6 +118,7 @@ public:
 		} ss_effects_data;
 
 		RendererRD::RestirGI::RenderBuffers restir_gi_buffers;
+		RendererRD::TemporalDirectionalShadow::History directional_shadow_history;
 
 		enum DepthFrameBufferType {
 			DEPTH_FB,
@@ -747,6 +749,7 @@ private:
 	/* Effects */
 
 	RendererRD::TAA *taa = nullptr;
+	RendererRD::TemporalDirectionalShadow *temporal_directional_shadow = nullptr;
 	RendererRD::FSR2Effect *fsr2_effect = nullptr;
 	RendererRD::SSEffects *ss_effects = nullptr;
 	RendererRD::RestirGI *restir_gi = nullptr;

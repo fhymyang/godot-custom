@@ -718,6 +718,7 @@ void LightStorage::update_light_buffers(RenderDataRD *p_render_data, const Paged
 	Transform3D inverse_transform = p_camera_transform.affine_inverse();
 
 	r_directional_light_count = 0;
+	temporal_directional_light = TemporalDirectionalLight();
 	r_positional_light_count = 0;
 
 	omni_light_count = 0;
@@ -854,6 +855,16 @@ void LightStorage::update_light_buffers(RenderDataRD *p_render_data, const Paged
 								light_data.uv_scale4[0] = uv_scale.x;
 								light_data.uv_scale4[1] = uv_scale.y;
 							} break;
+						}
+					}
+
+					if (light_data.energy > temporal_directional_light.energy && light->bake_mode != RSE::LIGHT_BAKE_STATIC) {
+						temporal_directional_light.instance = p_lights[i];
+						temporal_directional_light.direction = light_transform.basis.xform(Vector3(0, 0, 1)).normalized();
+						temporal_directional_light.energy = light_data.energy;
+						temporal_directional_light.index = r_directional_light_count;
+						for (int split = 0; split < 4; split++) {
+							temporal_directional_light.atlas_rects[split] = light_instance->shadow_transform[MIN(limit, split)].atlas_rect;
 						}
 					}
 

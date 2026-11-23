@@ -2352,8 +2352,23 @@ void fragment_shader(in SceneData scene_data) {
 	normal_bias -= light_dir * dot(light_dir, normal_bias);                                     \
 	m_var.xyz += normal_bias;
 
-					//version with soft shadows, more expensive
-					if (sc_use_directional_soft_shadows() && directional_lights.data[i].softshadow_angle > 0) {
+					bool has_temporal_shadow = false;
+					vec4 temporal_shadow = vec4(0.0);
+					ivec2 pixel = ivec2(gl_FragCoord.xy);
+					ivec2 shadow_size = textureSize(sampler2D(temporal_directional_shadow, SAMPLER_NEAREST_CLAMP), 0);
+#ifdef USE_LIGHTMAP
+					if (shadowmask_mode == LIGHTMAP_SHADOWMASK_MODE_NONE)
+#endif
+					{
+						if (shadow_size.x > 1 && all(lessThan(pixel, shadow_size))) {
+							temporal_shadow = texelFetch(sampler2D(temporal_directional_shadow, SAMPLER_NEAREST_CLAMP), pixel, 0);
+							// The resolved prepass may belong to another surface at MSAA edges.
+							has_temporal_shadow = temporal_shadow.z == float(i + 1u) && abs(temporal_shadow.y - depth_z) < max(0.03, depth_z * 0.001);
+						}
+					}
+					if (has_temporal_shadow) {
+						shadow = min(temporal_shadow.x, temporal_shadow.w);
+					} else if (sc_use_directional_soft_shadows() && directional_lights.data[i].softshadow_angle > 0) {
 						uint blend_count = 0;
 						const uint blend_max = directional_lights.data[i].blend_splits ? 2 : 1;
 
