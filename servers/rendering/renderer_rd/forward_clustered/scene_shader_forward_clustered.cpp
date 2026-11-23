@@ -77,6 +77,7 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	uses_vertex = false;
 	uses_position = false;
 	uses_sss = false;
+	uses_emission = false;
 	uses_transmittance = false;
 	uses_time = false;
 	writes_modelview_or_projection = false;
@@ -150,6 +151,7 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	actions.write_flag_pointers["MODELVIEW_MATRIX"] = &writes_modelview_or_projection;
 	actions.write_flag_pointers["PROJECTION_MATRIX"] = &writes_modelview_or_projection;
 	actions.write_flag_pointers["VERTEX"] = &uses_vertex;
+	actions.write_flag_pointers["EMISSION"] = &uses_emission;
 	actions.write_flag_pointers["POSITION"] = &uses_position;
 	actions.write_flag_pointers["TANGENT"] = &writes_tangent;
 	actions.write_flag_pointers["BINORMAL"] = &writes_tangent;
@@ -593,6 +595,16 @@ void SceneShaderForwardClustered::MaterialData::set_next_pass(RID p_pass) {
 
 bool SceneShaderForwardClustered::MaterialData::update_parameters(const HashMap<StringName, Variant> &p_parameters, bool p_uniform_dirty, bool p_textures_dirty) {
 	if (shader_data->version.is_valid()) {
+		if (p_uniform_dirty && RD::get_singleton()->has_feature(RD::SUPPORTS_RAY_QUERY)) {
+			const Variant *albedo = p_parameters.getptr(SNAME("albedo"));
+			const Variant *metallic = p_parameters.getptr(SNAME("metallic"));
+			const Variant *emission = p_parameters.getptr(SNAME("emission"));
+			const Variant *energy = p_parameters.getptr(SNAME("emission_energy"));
+			raytracing_diffuse = albedo && albedo->get_type() == Variant::COLOR ? Color(*albedo).srgb_to_linear() : Color(1, 1, 1);
+			raytracing_diffuse *= 1.0f - (metallic && metallic->is_num() ? CLAMP(float(*metallic), 0.0f, 1.0f) : 0.0f);
+			raytracing_emission = emission && emission->get_type() == Variant::COLOR ? Color(*emission).srgb_to_linear() : Color(0, 0, 0);
+			raytracing_emission *= energy && energy->is_num() ? MAX(0.0f, float(*energy)) : 1.0f;
+		}
 		RID shader_rid = SceneShaderForwardClustered::singleton->shader.version_get_shader(shader_data->version, 0);
 
 		MutexLock lock(SceneShaderForwardClustered::singleton_mutex);

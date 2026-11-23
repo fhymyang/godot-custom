@@ -155,6 +155,8 @@ private:
 
 		// SSIL
 		bool ssil_enabled = false;
+		bool ssil_use_restir = false;
+		bool ssil_use_monte_carlo = false;
 		float ssil_radius = 5.0;
 		float ssil_intensity = 1.0;
 		float ssil_sharpness = 0.98;
@@ -304,6 +306,10 @@ public:
 	float environment_get_ssao_ao_channel_affect(RID p_env) const;
 
 	// SSIL
+	void environment_set_ssil_use_restir(RID p_env, bool p_enabled);
+	void environment_set_ssil_use_monte_carlo(RID p_env, bool p_enabled);
+	bool environment_get_ssil_use_restir(RID p_env) const;
+	bool environment_get_ssil_use_monte_carlo(RID p_env) const;
 	void environment_set_ssil(RID p_env, bool p_enable, float p_radius, float p_intensity, float p_sharpness, float p_normal_rejection);
 	bool environment_get_ssil_enabled(RID p_env) const;
 	float environment_get_ssil_radius(RID p_env) const;

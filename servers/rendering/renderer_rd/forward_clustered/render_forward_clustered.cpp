@@ -115,6 +115,8 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
 		render_buffers->clear_context(RB_SCOPE_FORWARD_CLUSTERED);
 		render_buffers->clear_context(RB_SCOPE_SSDS);
 		render_buffers->clear_context(RB_SCOPE_SSIL);
+		render_buffers->clear_context(RB_SCOPE_RESTIR_GI);
+		restir_gi_buffers.clear();
 		render_buffers->clear_context(RB_SCOPE_SSAO);
 		render_buffers->clear_context(RB_SCOPE_SSR);
 	}
@@ -1445,6 +1447,128 @@ void RenderForwardClustered::_process_ssao(Ref<RenderSceneBuffersRD> p_render_bu
 	}
 }
 
+bool RenderForwardClustered::supports_restir_gi() const {
+	return RD::get_singleton()->has_feature(RD::SUPPORTS_RAY_QUERY);
+}
+
+bool RenderForwardClustered::_process_restir_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals) {
+	const bool monte_carlo = environment_get_ssil_use_monte_carlo(p_render_data->environment);
+	RENDER_TIMESTAMP(monte_carlo ? "Monte Carlo GI" : "ReSTIR GI");
+
+	const RID environment = p_render_data->environment;
+	const RendererRD::RestirGI::Settings settings = {
+		MAX(0.025f, environment_get_ssil_radius(environment)),
+		MAX(0.0f, environment_get_ssil_intensity(environment)),
+		CLAMP(environment_get_ssil_normal_rejection(environment), 0.0f, 1.0f),
+		CLAMP(environment_get_ssil_sharpness(environment), 0.0f, 1.0f),
+	};
+
+	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
+	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
+	const Vector3 camera_origin = p_render_data->scene_data->cam_transform.origin;
+	const float exposure = p_render_data->camera_attributes.is_valid() ? RSG::camera_attributes->camera_attributes_get_exposure_normalization_factor(p_render_data->camera_attributes) : 1.0f;
+	LocalVector<RD::AccelerationStructureInstance> instances;
+	LocalVector<RendererRD::RestirGI::Surface> surfaces;
+	HashSet<RID> geometry_buffers;
+
+	for (RenderGeometryInstance *geometry : *p_render_data->raytracing_instances) {
+		const GeometryInstanceForwardClustered *instance = static_cast<GeometryInstanceForwardClustered *>(geometry);
+		if (instance->mesh_instance.is_valid() || instance->force_alpha < FADE_ALPHA_PASS_THRESHOLD ||
+				instance->fade_near || instance->fade_far || instance->transform.basis.determinant() == 0.0) {
+			continue;
+		}
+
+		Transform3D transform = instance->transform;
+		transform.origin -= camera_origin;
+		for (const GeometryInstanceSurfaceDataCache *surface = instance->surface_caches; surface; surface = surface->next) {
+			const SceneShaderForwardClustered::ShaderData *shader = surface->shader;
+			if (!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PRIMARY_MATERIAL) ||
+					!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE) ||
+					shader->uses_alpha_clip || shader->uses_discard || shader->uses_vertex || shader->uses_position ||
+					shader->writes_modelview_or_projection || shader->wireframe || shader->stencil_enabled) {
+				continue;
+			}
+
+			RendererRD::MeshStorage::RaytracingGeometry raytracing_geometry;
+			if (!mesh_storage->mesh_surface_get_raytracing_geometry(surface->surface, raytracing_geometry)) {
+				continue;
+			}
+
+			ERR_FAIL_COND_V_MSG(instances.size() >= (1u << 24), false, "Exceeded the maximum number of addressable ray tracing instances.");
+			RD::AccelerationStructureInstance raytracing_instance;
+			raytracing_instance.transform = transform * raytracing_geometry.vertex_transform;
+			raytracing_instance.blas = raytracing_geometry.blas;
+			raytracing_instance.id = instances.size();
+			instances.push_back(raytracing_instance);
+
+			const Color diffuse = surface->material->raytracing_diffuse;
+			const Color emission = shader->uses_emission ? surface->material->raytracing_emission : Color(0, 0, 0);
+			RendererRD::RestirGI::Surface material;
+			material.vertex_address[0] = uint32_t(raytracing_geometry.vertex_address);
+			material.vertex_address[1] = uint32_t(raytracing_geometry.vertex_address >> 32);
+			material.index_address[0] = uint32_t(raytracing_geometry.index_address);
+			material.index_address[1] = uint32_t(raytracing_geometry.index_address >> 32);
+			material.vertex_stride = raytracing_geometry.vertex_stride;
+			material.index_stride = raytracing_geometry.index_stride;
+			material.layers = instance->layer_mask;
+			material.diffuse[0] = shader->unshaded ? 0.0f : diffuse.r;
+			material.diffuse[1] = shader->unshaded ? 0.0f : diffuse.g;
+			material.diffuse[2] = shader->unshaded ? 0.0f : diffuse.b;
+			material.emission[0] = (emission.r + (shader->unshaded ? diffuse.r : 0.0f)) * exposure;
+			material.emission[1] = (emission.g + (shader->unshaded ? diffuse.g : 0.0f)) * exposure;
+			material.emission[2] = (emission.b + (shader->unshaded ? diffuse.b : 0.0f)) * exposure;
+			surfaces.push_back(material);
+
+			geometry_buffers.insert(raytracing_geometry.vertex_buffer);
+			if (raytracing_geometry.index_buffer.is_valid()) {
+				geometry_buffers.insert(raytracing_geometry.index_buffer);
+			}
+		}
+	}
+
+	if (instances.is_empty()) {
+		return false;
+	}
+
+	LocalVector<RendererRD::RestirGI::DirectionalLight> lights;
+	for (uint64_t i = 0; i < p_render_data->lights->size() && lights.size() < RendererRD::RestirGI::MAX_LIGHTS; i++) {
+		const RID light_instance = (*p_render_data->lights)[i];
+		const RID light = light_storage->light_instance_get_base_light(light_instance);
+		if (light_storage->light_get_type(light) != RSE::LIGHT_DIRECTIONAL ||
+				light_storage->light_directional_get_sky_mode(light) == RSE::LIGHT_DIRECTIONAL_SKY_MODE_SKY_ONLY ||
+				light_storage->light_is_negative(light)) {
+			continue;
+		}
+		const float energy = light_storage->light_get_param(light, RSE::LIGHT_PARAM_ENERGY) *
+				light_storage->light_get_param(light, RSE::LIGHT_PARAM_INDIRECT_ENERGY) * exposure *
+				(is_using_physical_light_units() ? light_storage->light_get_param(light, RSE::LIGHT_PARAM_INTENSITY) : float(Math::PI));
+		if (energy <= 0.0f) {
+			continue;
+		}
+
+		const Vector3 direction = light_storage->light_instance_get_base_transform(light_instance).basis.get_column(2).normalized();
+		const Color radiance = light_storage->light_get_color(light).srgb_to_linear() * energy;
+		RendererRD::RestirGI::DirectionalLight directional = {};
+		directional.direction[0] = direction.x;
+		directional.direction[1] = direction.y;
+		directional.direction[2] = direction.z;
+		directional.shadow_opacity = light_storage->light_has_shadow(light) ? light_storage->light_get_param(light, RSE::LIGHT_PARAM_SHADOW_OPACITY) : 0.0f;
+		directional.radiance[0] = radiance.r;
+		directional.radiance[1] = radiance.g;
+		directional.radiance[2] = radiance.b;
+		const float shadow_distance = light_storage->light_get_param(light, RSE::LIGHT_PARAM_SHADOW_MAX_DISTANCE);
+		directional.shadow_distance = MAX(settings.radius, shadow_distance > 0.0f ? shadow_distance : p_render_data->scene_data->z_far);
+		directional.layers[0] = light_storage->light_get_cull_mask(light);
+		lights.push_back(directional);
+	}
+
+	if (!restir_gi) {
+		restir_gi = memnew(RendererRD::RestirGI);
+	}
+	return restir_gi->render(p_render_data->render_buffers, r_buffers.restir_gi_buffers, *p_render_data->scene_data, environment,
+			RSG::rasterizer->get_frame_number(), p_normals, instances, surfaces, geometry_buffers, lights, settings, monte_carlo);
+}
+
 void RenderForwardClustered::_process_ssil(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections, const Transform3D &p_transform) {
 	ERR_FAIL_NULL(ss_effects);
 	ERR_FAIL_COND(p_render_buffers.is_null());
@@ -1616,11 +1740,22 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		// This should allow most of the processing to happen in parallel even if we're doing
 		// drawcalls per eye/view. It will all sync up at the barrier.
 
-		if (p_use_ssil || p_use_ssr) {
-			ss_effects->allocate_last_frame_buffer(rb, p_use_ssil, p_use_ssr);
+		bool use_legacy_ssil = p_use_ssil;
+		if (p_use_ssil && p_render_data->raytracing_instances && get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_UNSHADED) {
+			use_legacy_ssil = !_process_restir_gi(p_render_data, **rb_data, p_normal_roughness_slices);
+		}
+		if (!p_use_ssil || use_legacy_ssil) {
+			rb->clear_context(RB_SCOPE_RESTIR_GI);
+			if (rb_data->restir_gi_buffers.size != Size2i()) {
+				rb_data->restir_gi_buffers.clear();
+			}
 		}
 
-		if (p_use_ssao || p_use_ssil) {
+		if (use_legacy_ssil || p_use_ssr) {
+			ss_effects->allocate_last_frame_buffer(rb, use_legacy_ssil, p_use_ssr);
+		}
+
+		if (p_use_ssao || use_legacy_ssil) {
 			RENDER_TIMESTAMP("Prepare Depth for SSAO/SSIL");
 			// Convert our depth buffer data to linear data in
 			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
@@ -1631,7 +1766,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 				_process_ssao(rb, p_render_data->environment, p_normal_roughness_slices, p_render_data->scene_data->view_projection);
 			}
 
-			if (p_use_ssil) {
+			if (use_legacy_ssil) {
 				_process_ssil(rb, p_render_data->environment, p_normal_roughness_slices, p_render_data->scene_data->view_projection, p_render_data->scene_data->cam_transform);
 			}
 		}
@@ -2447,9 +2582,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	RD::get_singleton()->draw_command_end_label();
 
 	RD::get_singleton()->draw_command_begin_label("Copy Framebuffer for SSIL/SSR");
-	if (using_ssil || using_ssr) {
+	const bool using_legacy_ssil = using_ssil && rb.is_valid() && !rb->has_texture(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING);
+	if (using_legacy_ssil || using_ssr) {
 		RENDER_TIMESTAMP("Copy Final Framebuffer (SSIL/SSR)");
-		_copy_framebuffer_to_ss_effects(rb, using_ssil, using_ssr);
+		_copy_framebuffer_to_ss_effects(rb, using_legacy_ssil, using_ssr);
 	}
 	RD::get_singleton()->draw_command_end_label();
 
@@ -2588,10 +2724,17 @@ void RenderForwardClustered::_render_buffers_debug_draw(const RenderDataRD *p_re
 		copy_effects->copy_to_fb_rect(final, texture_storage->render_target_get_rd_framebuffer(render_target), Rect2(Vector2(), rtsize), false, true);
 	}
 
-	if (get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_SSIL && rb->has_texture(RB_SCOPE_SSIL, RB_FINAL)) {
-		RID final = rb->get_texture_slice(RB_SCOPE_SSIL, RB_FINAL, 0, 0);
-		Size2i rtsize = texture_storage->render_target_get_size(render_target);
-		copy_effects->copy_to_fb_rect(final, texture_storage->render_target_get_rd_framebuffer(render_target), Rect2(Vector2(), rtsize), false, false);
+	if (get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_SSIL) {
+		RID final;
+		if (rb->has_texture(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING)) {
+			final = rb->get_texture_slice(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING, 0, 0);
+		} else if (rb->has_texture(RB_SCOPE_SSIL, RB_FINAL)) {
+			final = rb->get_texture_slice(RB_SCOPE_SSIL, RB_FINAL, 0, 0);
+		}
+		if (final.is_valid()) {
+			Size2i rtsize = texture_storage->render_target_get_size(render_target);
+			copy_effects->copy_to_fb_rect(final, texture_storage->render_target_get_rd_framebuffer(render_target), Rect2(Vector2(), rtsize), false, false);
+		}
 	}
 
 	if (get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_GI_BUFFER && rb->has_texture(RB_SCOPE_GI, RB_TEX_AMBIENT)) {
@@ -3724,7 +3867,12 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		RD::Uniform u;
 		u.binding = 34;
 		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
-		RID ssil = rb.is_valid() && rb->has_texture(RB_SCOPE_SSIL, RB_FINAL) ? rb->get_texture(RB_SCOPE_SSIL, RB_FINAL) : RID();
+		RID ssil;
+		if (rb.is_valid() && rb->has_texture(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING)) {
+			ssil = rb->get_texture(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING);
+		} else if (rb.is_valid() && rb->has_texture(RB_SCOPE_SSIL, RB_FINAL)) {
+			ssil = rb->get_texture(RB_SCOPE_SSIL, RB_FINAL);
+		}
 		RID texture = ssil.is_valid() ? ssil : texture_storage->texture_rd_get_default(is_multiview ? RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_BLACK : RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_BLACK);
 		u.append_id(texture);
 		uniforms.push_back(u);
@@ -4292,11 +4440,14 @@ void RenderForwardClustered::_geometry_instance_add_surface_with_material(Geomet
 #endif
 }
 
-void RenderForwardClustered::_geometry_instance_add_surface_with_material_chain(GeometryInstanceForwardClustered *ginstance, uint32_t p_surface, SceneShaderForwardClustered::MaterialData *p_material, RID p_mat_src, RID p_mesh) {
+void RenderForwardClustered::_geometry_instance_add_surface_with_material_chain(GeometryInstanceForwardClustered *ginstance, uint32_t p_surface, SceneShaderForwardClustered::MaterialData *p_material, RID p_mat_src, RID p_mesh, bool p_primary_material) {
 	SceneShaderForwardClustered::MaterialData *material = p_material;
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
 
 	_geometry_instance_add_surface_with_material(ginstance, p_surface, material, p_mat_src.get_local_index(), material_storage->material_get_shader_id(p_mat_src), p_mesh);
+	if (p_primary_material) {
+		ginstance->surface_caches->flags |= GeometryInstanceSurfaceDataCache::FLAG_PRIMARY_MATERIAL;
+	}
 
 	while (material->next_pass.is_valid()) {
 		RID next_pass = material->next_pass;
@@ -4337,7 +4488,7 @@ void RenderForwardClustered::_geometry_instance_add_surface(GeometryInstanceForw
 
 	ERR_FAIL_NULL(material);
 
-	_geometry_instance_add_surface_with_material_chain(ginstance, p_surface, material, m_src, p_mesh);
+	_geometry_instance_add_surface_with_material_chain(ginstance, p_surface, material, m_src, p_mesh, true);
 
 	if (ginstance->data->material_overlay.is_valid()) {
 		m_src = ginstance->data->material_overlay;
@@ -4348,7 +4499,7 @@ void RenderForwardClustered::_geometry_instance_add_surface(GeometryInstanceForw
 				material_storage->material_update_dependency(m_src, &ginstance->data->dependency_tracker);
 			}
 
-			_geometry_instance_add_surface_with_material_chain(ginstance, p_surface, material, m_src, p_mesh);
+			_geometry_instance_add_surface_with_material_chain(ginstance, p_surface, material, m_src, p_mesh, false);
 		}
 	}
 }
@@ -5246,6 +5397,10 @@ RenderForwardClustered::RenderForwardClustered() {
 }
 
 RenderForwardClustered::~RenderForwardClustered() {
+	if (restir_gi) {
+		memdelete(restir_gi);
+	}
+
 	if (ss_effects != nullptr) {
 		memdelete(ss_effects);
 		ss_effects = nullptr;

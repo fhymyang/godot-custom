@@ -82,6 +82,8 @@ private:
 			uint32_t vertex_count = 0;
 			RID vertex_buffer;
 			uint32_t vertex_buffer_size = 0;
+			RID raytracing_blas;
+			bool raytracing_build_input = false;
 
 			RID attribute_buffer;
 			uint32_t attribute_buffer_size = 0;
@@ -441,6 +443,19 @@ public:
 
 		return mesh->shadow_mesh;
 	}
+
+	struct RaytracingGeometry {
+		RID blas;
+		RID vertex_buffer;
+		RID index_buffer;
+		Transform3D vertex_transform;
+		uint64_t vertex_address = 0;
+		uint64_t index_address = 0;
+		uint32_t vertex_stride = 0;
+		uint32_t index_stride = 0;
+	};
+
+	bool mesh_surface_get_raytracing_geometry(void *p_surface, RaytracingGeometry &r_geometry);
 
 	_FORCE_INLINE_ RSE::PrimitiveType mesh_surface_get_primitive(void *p_surface) {
 		Mesh::Surface *surface = reinterpret_cast<Mesh::Surface *>(p_surface);

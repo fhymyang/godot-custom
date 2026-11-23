@@ -299,6 +299,15 @@
 		<member name="ssil_sharpness" type="float" setter="set_ssil_sharpness" getter="get_ssil_sharpness" default="0.98">
 			The amount that the screen-space indirect lighting effect is allowed to blur over the edges of objects. Setting too high will result in aliasing around the edges of objects. Setting too low will make object edges appear blurry.
 		</member>
+		<member name="ssil_use_monte_carlo" type="bool" setter="set_ssil_use_monte_carlo" getter="is_ssil_using_monte_carlo" default="false">
+			With [member ssil_enabled], traces one cosine-weighted diffuse ray per half-resolution pixel and filters the result across neighboring pixels and frames. Takes precedence over [member ssil_use_restir]. Both modes share hit shading, hardware requirements and the standard SSIL fallback.
+		</member>
+		<member name="ssil_use_restir" type="bool" setter="set_ssil_use_restir" getter="is_ssil_using_restir" default="false">
+			Uses experimental ReSTIR GI when [member ssil_enabled] is enabled. It traces one diffuse bounce through the 3D scene and reuses samples between frames and neighboring pixels. The indirect lighting is temporally filtered using reprojected surface positions and normals, with history clamped to the local lighting variation. The effect uses [member ssil_radius] as the maximum bounce distance and [member ssil_intensity] as an output multiplier.
+			The ray tracing scene includes eligible opaque, rigid triangle mesh surfaces, including surfaces outside the camera frustum. Hit shading uses constant material colors and emission, and up to four directional lights. Textures, local lights, skinned geometry, [MultiMesh]es, and alpha-tested materials are currently excluded from hit shading or ray tracing geometry.
+			Compressed mesh surfaces require hardware support for their acceleration structure vertex format.
+			[b]Note:[/b] Requires Forward+ and [constant RenderingDevice.SUPPORTS_RAY_QUERY] on the Vulkan or Metal rendering driver. Other Forward+ devices use screen-space indirect lighting when this property is enabled.
+		</member>
 		<member name="ssr_depth_tolerance" type="float" setter="set_ssr_depth_tolerance" getter="get_ssr_depth_tolerance" default="0.5">
 			The depth tolerance for screen-space reflections.
 		</member>

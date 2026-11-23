@@ -635,6 +635,22 @@ float RendererSceneRender::environment_get_ssao_ao_channel_affect(RID p_env) con
 
 // SSIL
 
+void RendererSceneRender::environment_set_ssil_use_restir(RID p_env, bool p_enabled) {
+	environment_storage.environment_set_ssil_use_restir(p_env, p_enabled);
+}
+
+void RendererSceneRender::environment_set_ssil_use_monte_carlo(RID p_env, bool p_enabled) {
+	environment_storage.environment_set_ssil_use_monte_carlo(p_env, p_enabled);
+}
+
+bool RendererSceneRender::environment_get_ssil_use_restir(RID p_env) const {
+	return environment_storage.environment_get_ssil_use_restir(p_env);
+}
+
+bool RendererSceneRender::environment_get_ssil_use_monte_carlo(RID p_env) const {
+	return environment_storage.environment_get_ssil_use_monte_carlo(p_env);
+}
+
 void RendererSceneRender::environment_set_ssil(RID p_env, bool p_enable, float p_radius, float p_intensity, float p_sharpness, float p_normal_rejection) {
 	environment_storage.environment_set_ssil(p_env, p_enable, p_radius, p_intensity, p_sharpness, p_normal_rejection);
 }

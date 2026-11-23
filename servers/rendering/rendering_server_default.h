@@ -862,6 +862,8 @@ public:
 	FUNC10(environment_set_ssao, RID, bool, float, float, float, float, float, float, float, float)
 	FUNC6(environment_set_ssao_quality, RSE::EnvironmentSSAOQuality, bool, float, int, float, float)
 
+	FUNC2(environment_set_ssil_use_restir, RID, bool)
+	FUNC2(environment_set_ssil_use_monte_carlo, RID, bool)
 	FUNC6(environment_set_ssil, RID, bool, float, float, float, float)
 	FUNC6(environment_set_ssil_quality, RSE::EnvironmentSSILQuality, bool, float, int, float, float)
 

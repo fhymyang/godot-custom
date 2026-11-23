@@ -423,6 +423,24 @@ bool Environment::is_ssil_enabled() const {
 	return ssil_enabled;
 }
 
+void Environment::set_ssil_use_restir(bool p_enabled) {
+	ssil_use_restir = p_enabled;
+	RS::get_singleton()->environment_set_ssil_use_restir(environment, p_enabled);
+}
+
+void Environment::set_ssil_use_monte_carlo(bool p_enabled) {
+	ssil_use_monte_carlo = p_enabled;
+	RS::get_singleton()->environment_set_ssil_use_monte_carlo(environment, p_enabled);
+}
+
+bool Environment::is_ssil_using_restir() const {
+	return ssil_use_restir;
+}
+
+bool Environment::is_ssil_using_monte_carlo() const {
+	return ssil_use_monte_carlo;
+}
+
 void Environment::set_ssil_radius(float p_radius) {
 	ssil_radius = p_radius;
 	_update_ssil();
@@ -1371,6 +1389,10 @@ void Environment::_bind_methods() {
 	// SSIL
 	ClassDB::bind_method(D_METHOD("set_ssil_enabled", "enabled"), &Environment::set_ssil_enabled);
 	ClassDB::bind_method(D_METHOD("is_ssil_enabled"), &Environment::is_ssil_enabled);
+	ClassDB::bind_method(D_METHOD("set_ssil_use_restir", "enabled"), &Environment::set_ssil_use_restir);
+	ClassDB::bind_method(D_METHOD("set_ssil_use_monte_carlo", "enabled"), &Environment::set_ssil_use_monte_carlo);
+	ClassDB::bind_method(D_METHOD("is_ssil_using_restir"), &Environment::is_ssil_using_restir);
+	ClassDB::bind_method(D_METHOD("is_ssil_using_monte_carlo"), &Environment::is_ssil_using_monte_carlo);
 	ClassDB::bind_method(D_METHOD("set_ssil_radius", "radius"), &Environment::set_ssil_radius);
 	ClassDB::bind_method(D_METHOD("get_ssil_radius"), &Environment::get_ssil_radius);
 	ClassDB::bind_method(D_METHOD("set_ssil_intensity", "intensity"), &Environment::set_ssil_intensity);
@@ -1382,6 +1404,8 @@ void Environment::_bind_methods() {
 
 	ADD_GROUP("SSIL", "ssil_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssil_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_ssil_enabled", "is_ssil_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssil_use_restir"), "set_ssil_use_restir", "is_ssil_using_restir");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssil_use_monte_carlo"), "set_ssil_use_monte_carlo", "is_ssil_using_monte_carlo");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssil_radius", PROPERTY_HINT_RANGE, "0.01,16,0.01,or_greater,suffix:m"), "set_ssil_radius", "get_ssil_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssil_intensity", PROPERTY_HINT_RANGE, "0,16,0.01,or_greater"), "set_ssil_intensity", "get_ssil_intensity");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssil_sharpness", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ssil_sharpness", "get_ssil_sharpness");

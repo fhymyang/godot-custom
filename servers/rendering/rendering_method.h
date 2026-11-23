@@ -285,6 +285,10 @@ public:
 
 	// SSIL
 
+	virtual void environment_set_ssil_use_restir(RID p_env, bool p_enabled) = 0;
+	virtual void environment_set_ssil_use_monte_carlo(RID p_env, bool p_enabled) = 0;
+	virtual bool environment_get_ssil_use_restir(RID p_env) const = 0;
+	virtual bool environment_get_ssil_use_monte_carlo(RID p_env) const = 0;
 	virtual void environment_set_ssil(RID p_env, bool p_enable, float p_radius, float p_intensity, float p_sharpness, float p_normal_rejection) = 0;
 
 	virtual bool environment_get_ssil_enabled(RID p_env) const = 0;

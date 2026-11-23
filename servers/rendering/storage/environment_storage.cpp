@@ -767,6 +767,30 @@ float RendererEnvironmentStorage::environment_get_ssao_ao_channel_affect(RID p_e
 
 // SSIL
 
+void RendererEnvironmentStorage::environment_set_ssil_use_restir(RID p_env, bool p_enabled) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+	env->ssil_use_restir = p_enabled;
+}
+
+void RendererEnvironmentStorage::environment_set_ssil_use_monte_carlo(RID p_env, bool p_enabled) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+	env->ssil_use_monte_carlo = p_enabled;
+}
+
+bool RendererEnvironmentStorage::environment_get_ssil_use_restir(RID p_env) const {
+	const Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, false);
+	return env->ssil_use_restir;
+}
+
+bool RendererEnvironmentStorage::environment_get_ssil_use_monte_carlo(RID p_env) const {
+	const Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, false);
+	return env->ssil_use_monte_carlo;
+}
+
 void RendererEnvironmentStorage::environment_set_ssil(RID p_env, bool p_enable, float p_radius, float p_intensity, float p_sharpness, float p_normal_rejection) {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL(env);

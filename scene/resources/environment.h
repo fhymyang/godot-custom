@@ -142,6 +142,8 @@ private:
 
 	// SSIL
 	bool ssil_enabled = false;
+	bool ssil_use_restir = false;
+	bool ssil_use_monte_carlo = false;
 	float ssil_radius = 5.0;
 	float ssil_intensity = 1.0;
 	float ssil_sharpness = 0.98;
@@ -314,6 +316,10 @@ public:
 	// SSIL
 	void set_ssil_enabled(bool p_enabled);
 	bool is_ssil_enabled() const;
+	void set_ssil_use_restir(bool p_enabled);
+	void set_ssil_use_monte_carlo(bool p_enabled);
+	bool is_ssil_using_restir() const;
+	bool is_ssil_using_monte_carlo() const;
 	void set_ssil_radius(float p_radius);
 	float get_ssil_radius() const;
 	void set_ssil_intensity(float p_intensity);

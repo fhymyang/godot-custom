@@ -1336,6 +1336,10 @@ public:
 	PASS6(environment_set_ssao_quality, RSE::EnvironmentSSAOQuality, bool, float, int, float, float)
 
 	// SSIL
+	PASS2(environment_set_ssil_use_restir, RID, bool)
+	PASS2(environment_set_ssil_use_monte_carlo, RID, bool)
+	PASS1RC(bool, environment_get_ssil_use_restir, RID)
+	PASS1RC(bool, environment_get_ssil_use_monte_carlo, RID)
 	PASS6(environment_set_ssil, RID, bool, float, float, float, float)
 
 	PASS1RC(bool, environment_get_ssil_enabled, RID)

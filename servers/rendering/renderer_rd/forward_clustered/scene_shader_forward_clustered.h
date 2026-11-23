@@ -258,6 +258,7 @@ public:
 		bool uses_vertex = false;
 		bool uses_position = false;
 		bool uses_sss = false;
+		bool uses_emission = false;
 		bool uses_transmittance = false;
 		bool uses_screen_texture = false;
 		bool uses_depth_texture = false;
@@ -332,6 +333,8 @@ public:
 		uint64_t last_pass = 0;
 		uint32_t index = 0;
 		RID next_pass;
+		Color raytracing_diffuse = Color(1, 1, 1);
+		Color raytracing_emission = Color(0, 0, 0);
 		uint8_t priority;
 		virtual void set_render_priority(int p_priority);
 		virtual void set_next_pass(RID p_pass);
