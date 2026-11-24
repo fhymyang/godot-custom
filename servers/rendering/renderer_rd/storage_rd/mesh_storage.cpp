@@ -30,6 +30,8 @@
 
 #include "mesh_storage.h"
 
+#include <algorithm>
+
 #include "servers/rendering/renderer_viewport.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/rendering/rendering_server_types.h"
@@ -559,6 +561,139 @@ void MeshStorage::_mesh_surface_clear(Mesh *p_mesh, int p_surface) {
 	memdelete(p_mesh->surfaces[p_surface]);
 }
 
+namespace {
+struct ProxyTriangle {
+	Vector3 a, b, c;
+	Vector3 center() const { return (a + b + c) / 3.0f; }
+};
+
+void build_triangle_nodes(Vector<MeshStorage::GIProxyNode> &r_nodes, ProxyTriangle *p_faces, uint32_t p_count) {
+	MeshStorage::GIProxyNode node = {};
+	const uint32_t index = r_nodes.size();
+	r_nodes.push_back(node);
+	if (p_count == 1) {
+		node.triangle = 1;
+		for (int axis = 0; axis < 3; axis++) {
+			node.a[axis] = p_faces->a[axis];
+			node.b[axis] = p_faces->b[axis];
+			node.c[axis] = p_faces->c[axis];
+		}
+	} else {
+		AABB box(p_faces->a, Vector3());
+		for (uint32_t i = 0; i < p_count; i++) {
+			box.expand_to(p_faces[i].a);
+			box.expand_to(p_faces[i].b);
+			box.expand_to(p_faces[i].c);
+		}
+		for (int axis = 0; axis < 3; axis++) {
+			node.a[axis] = box.position[axis] - 0.00001;
+			node.b[axis] = box.get_end()[axis] + 0.00001;
+		}
+		const int axis = box.get_longest_axis_index();
+		const uint32_t mid = p_count / 2;
+		std::nth_element(p_faces, p_faces + mid, p_faces + p_count, [axis](const ProxyTriangle &a, const ProxyTriangle &b) {
+			return a.center()[axis] < b.center()[axis];
+		});
+		build_triangle_nodes(r_nodes, p_faces, mid);
+		build_triangle_nodes(r_nodes, p_faces + mid, p_count - mid);
+	}
+	node.end = r_nodes.size();
+	r_nodes.set(index, node);
+}
+} // namespace
+
+void MeshStorage::mesh_surface_set_gi_proxy_faces(RID p_mesh, int p_surface, const Vector<Vector3> &p_faces) {
+	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
+	ERR_FAIL_NULL(mesh);
+	ERR_FAIL_INDEX(p_surface, int(mesh->surface_count));
+	ERR_FAIL_COND(p_faces.size() % 3 != 0);
+	for (const Vector3 &point : p_faces) {
+		ERR_FAIL_COND(!point.is_finite());
+	}
+	mesh->surfaces[p_surface]->gi_proxy_faces = p_faces;
+	mesh->surfaces[p_surface]->gi_proxy = GIProxyGeometry();
+}
+
+const MeshStorage::GIProxyGeometry &MeshStorage::mesh_get_gi_proxy(RID p_mesh, uint32_t p_surface) {
+	Mesh::Surface &surface = *static_cast<Mesh::Surface *>(mesh_get_surface(p_mesh, p_surface));
+	GIProxyGeometry &proxy = surface.gi_proxy;
+	if (proxy.version != 0) {
+		return proxy;
+	}
+	static uint64_t next_version = 0; // Accessed on the render thread.
+	proxy.version = ++next_version;
+	if (surface.primitive != RSE::PRIMITIVE_TRIANGLES || !(surface.format & RSE::ARRAY_FORMAT_VERTEX) || (surface.format & RSE::ARRAY_FLAG_USE_2D_VERTICES)) {
+		return proxy;
+	}
+	Vector<Vector3> vertices = surface.gi_proxy_faces;
+	Vector<int32_t> indices;
+	bool simplify_dense_mesh = false;
+	if (vertices.is_empty()) {
+		// Read once per geometry revision. Repeated instances share the immutable proxy.
+		auto source = static_cast<const MeshStorage *>(this)->mesh_get_surface(p_mesh, int(p_surface));
+		if (!source.lods.is_empty()) {
+			const auto &lod = source.lods[source.lods.size() - 1];
+			source.index_data = lod.index_data;
+			source.index_count = lod.index_data.size() / (source.vertex_count <= 65536 ? 2 : 4);
+		}
+		const Array arrays = RS::get_singleton()->mesh_create_arrays_from_surface_data(source);
+		if (arrays.is_empty()) {
+			return proxy;
+		}
+		vertices = arrays[RSE::ARRAY_VERTEX];
+		if (source.index_count) {
+			indices = arrays[RSE::ARRAY_INDEX];
+		}
+		simplify_dense_mesh = source.lods.is_empty();
+	}
+	const int count = indices.is_empty() ? vertices.size() : indices.size();
+	if (vertices.is_empty() || count < 3) {
+		return proxy;
+	}
+	proxy.bounds = AABB(vertices[0], Vector3());
+	for (const Vector3 &point : vertices) {
+		proxy.bounds.expand_to(point);
+	}
+	proxy.bounds = proxy.bounds.grow(0.0001);
+	// Cluster dense render meshes into a collision-detail triangle shell. Keep small meshes exact.
+	for (int i = 0; i < vertices.size(); i++) {
+		vertices.set(i, (vertices[i] - proxy.bounds.position) / proxy.bounds.size);
+	}
+	if (simplify_dense_mesh && count > 288) {
+		struct Cluster {
+			Vector3 sum;
+			uint32_t count = 0;
+		};
+		HashMap<Vector3i, Cluster> cells;
+		for (const Vector3 &v : vertices) {
+			Cluster &cell = cells[Vector3i((v * 16.0f).floor())];
+			cell.sum += v;
+			cell.count++;
+		}
+		for (int i = 0; i < vertices.size(); i++) {
+			const Cluster &cell = cells[Vector3i((vertices[i] * 16.0f).floor())];
+			vertices.set(i, cell.sum / cell.count);
+		}
+	}
+	LocalVector<ProxyTriangle> faces;
+	for (int i = 0; i + 2 < count; i += 3) {
+		const int a = indices.is_empty() ? i : indices[i];
+		const int b = indices.is_empty() ? i + 1 : indices[i + 1];
+		const int c = indices.is_empty() ? i + 2 : indices[i + 2];
+		if (uint32_t(a) >= vertices.size() || uint32_t(b) >= vertices.size() || uint32_t(c) >= vertices.size()) {
+			continue;
+		}
+		ProxyTriangle face = { vertices[a], vertices[b], vertices[c] };
+		if ((face.b - face.a).cross(face.c - face.a).length_squared() > 1e-18) {
+			faces.push_back(face);
+		}
+	}
+	if (!faces.is_empty()) {
+		build_triangle_nodes(proxy.nodes, faces.ptr(), faces.size());
+	}
+	return proxy;
+}
+
 bool MeshStorage::mesh_surface_get_raytracing_geometry(void *p_surface, RaytracingGeometry &r_geometry) {
 	Mesh::Surface &surface = *static_cast<Mesh::Surface *>(p_surface);
 	if (!surface.raytracing_build_input || surface.vertex_buffer.is_null() || surface.vertex_count < 3 ||
@@ -648,7 +783,11 @@ void MeshStorage::mesh_surface_update_vertex_region(RID p_mesh, int p_surface, i
 	const uint8_t *r = p_data.ptr();
 
 	Mesh::Surface &surface = *mesh->surfaces[p_surface];
-	if (RD::get_singleton()->buffer_update(surface.vertex_buffer, p_offset, data_size, r) == OK && surface.raytracing_blas.is_valid()) {
+	if (RD::get_singleton()->buffer_update(surface.vertex_buffer, p_offset, data_size, r) != OK) {
+		return;
+	}
+	surface.gi_proxy = GIProxyGeometry();
+	if (surface.raytracing_blas.is_valid()) {
 		RD::get_singleton()->free_rid(surface.raytracing_blas);
 		surface.raytracing_blas = RID();
 	}
@@ -691,7 +830,11 @@ void RendererRD::MeshStorage::mesh_surface_update_index_region(RID p_mesh, int p
 	const uint8_t *r = p_data.ptr();
 
 	Mesh::Surface &surface = *mesh->surfaces[p_surface];
-	if (RD::get_singleton()->buffer_update(surface.index_buffer, p_offset, data_size, r) == OK && surface.raytracing_blas.is_valid()) {
+	if (RD::get_singleton()->buffer_update(surface.index_buffer, p_offset, data_size, r) != OK) {
+		return;
+	}
+	surface.gi_proxy = GIProxyGeometry();
+	if (surface.raytracing_blas.is_valid()) {
 		RD::get_singleton()->free_rid(surface.raytracing_blas);
 		surface.raytracing_blas = RID();
 	}

@@ -2655,6 +2655,15 @@
 				Sets a mesh's surface's material.
 			</description>
 		</method>
+		<method name="mesh_surface_set_gi_proxy_faces">
+			<return type="void" />
+			<param index="0" name="mesh" type="RID" />
+			<param index="1" name="surface" type="int" />
+			<param index="2" name="faces" type="PackedVector3Array" />
+			<description>
+				Sets local-space triangles for the software diffuse GI proxy of a mesh surface. Supply three vertices per triangle, for example from [method ConcavePolygonShape3D.get_faces]. An empty array restores automatic proxy generation from the coarsest mesh LOD or simplified render geometry. Used by Forward+ when [member ProjectSettings.rendering/environment/ssil/use_hybrid_diffuse_gi] is enabled.
+			</description>
+		</method>
 		<method name="mesh_surface_update_attribute_region">
 			<return type="void" />
 			<param index="0" name="mesh" type="RID" />

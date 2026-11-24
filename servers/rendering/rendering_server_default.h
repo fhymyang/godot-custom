@@ -397,6 +397,7 @@ public:
 	FUNC2(mesh_set_blend_shape_mode, RID, RSE::BlendShapeMode)
 	FUNC1RC(RSE::BlendShapeMode, mesh_get_blend_shape_mode, RID)
 
+	FUNC3(mesh_surface_set_gi_proxy_faces, RID, int, const Vector<Vector3> &)
 	FUNC4(mesh_surface_update_vertex_region, RID, int, int, const Vector<uint8_t> &)
 	FUNC4(mesh_surface_update_attribute_region, RID, int, int, const Vector<uint8_t> &)
 	FUNC4(mesh_surface_update_skin_region, RID, int, int, const Vector<uint8_t> &)

@@ -60,6 +60,7 @@ struct Node {
 struct Material {
 	vec4 diffuse;
 	vec4 emission;
+	uvec4 geometry;
 };
 layout(set = 0, binding = 3, std430) readonly buffer Nodes {
 	Node nodes[];
@@ -78,7 +79,51 @@ vec2 bounds(vec3 a, vec3 b) {
 	vec3 lo = min(a, b), hi = max(a, b);
 	return vec2(max(lo.x, max(lo.y, lo.z)), min(hi.x, min(hi.y, hi.z)));
 }
-bool trace_boxes(vec3 origin, vec3 direction, inout float nearest, out uint material, out vec3 normal) {
+struct TriangleNode {
+	vec3 a;
+	uint end;
+	vec3 b;
+	uint triangle;
+	vec4 c;
+};
+layout(set = 0, binding = 17, std430) readonly buffer TriangleNodes {
+	TriangleNode triangle_nodes[];
+};
+
+bool trace_mesh(vec3 origin, vec3 direction, uvec2 range, inout float nearest, out vec3 normal) {
+	vec3 inv = inverse_direction(direction);
+	bool found = false;
+	for (uint i = 0u; i < range.y;) {
+		TriangleNode node = triangle_nodes[range.x + i];
+		i++;
+		if (node.triangle == 0u) {
+			vec2 span = bounds((node.a - origin) * inv, (node.b - origin) * inv);
+			if (span.x >= nearest || span.y < max(span.x, 0.0)) {
+				i = node.end;
+			}
+			continue;
+		}
+		vec3 e1 = node.b - node.a, e2 = node.c.xyz - node.a;
+		vec3 p = cross(direction, e2);
+		float det = dot(e1, p);
+		if (abs(det) <= 1e-8 * length(e1) * length(p)) {
+			continue;
+		}
+		vec3 offset = origin - node.a;
+		float u = dot(offset, p) / det;
+		vec3 q = cross(offset, e1);
+		float v = dot(direction, q) / det;
+		float t = dot(e2, q) / det;
+		if (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.005 && t < nearest) {
+			nearest = t;
+			normal = cross(e1, e2);
+			found = true;
+		}
+	}
+	return found;
+}
+
+bool trace_proxies(vec3 origin, vec3 direction, inout float nearest, out uint material, out vec3 normal) {
 	vec3 inv = inverse_direction(direction);
 	bool found = false;
 	for (uint i = 0u; i < scene.node_count;) {
@@ -97,17 +142,15 @@ bool trace_boxes(vec3 origin, vec3 direction, inout float nearest, out uint mate
 			o[k] = dot(node.to_box[k], vec4(origin, 1));
 			d[k] = dot(node.to_box[k].xyz, direction);
 		}
-		vec3 inv_d = inverse_direction(d);
-		vec3 a = -o * inv_d, b = (1.0 - o) * inv_d;
-		span = bounds(a, b);
-		if (span.x <= 0.03 || span.x >= nearest || span.y < span.x) {
+		vec3 face_normal;
+		uint candidate = node.leaf - 1u;
+		if (!trace_mesh(o, d, materials[candidate].geometry.xy, nearest, face_normal)) {
 			continue;
 		}
-		vec3 entry = min(a, b);
-		int axis = entry.x >= entry.y && entry.x >= entry.z ? 0 : (entry.y >= entry.z ? 1 : 2);
-		normal = normalize(node.to_box[axis].xyz) * -sign(d[axis]);
-		material = node.leaf - 1u;
-		nearest = span.x;
+		// Use the inverse transpose for nonuniformly scaled instances.
+		normal = normalize(node.to_box[0].xyz * face_normal.x + node.to_box[1].xyz * face_normal.y + node.to_box[2].xyz * face_normal.z);
+		normal = faceforward(normal, direction, normal);
+		material = candidate;
 		found = true;
 	}
 	return found;
@@ -168,7 +211,7 @@ void main() {
 	uint material;
 	if (screen_trace(origin, dir, hit) && previous_uv(hit, uv)) {
 		light = textureLod(previous_color, uv, 0.0).rgb;
-	} else if (trace_boxes(origin, dir, dist, material, hit_normal)) {
+	} else if (trace_proxies(origin, dir, dist, material, hit_normal)) {
 		hit = origin + dir * dist;
 		vec4 clip = scene.projection * vec4(hit, 1);
 		vec2 curr_uv = clip.xy / clip.w * 0.5 + 0.5;
@@ -186,7 +229,7 @@ void main() {
 			float shadow_distance = scene.sun_direction_radius.w;
 			uint blocker;
 			vec3 blocker_normal;
-			if (cosine > 0.0 && trace_boxes(hit + hit_normal * 0.03, scene.sun_direction_radius.xyz, shadow_distance, blocker, blocker_normal)) {
+			if (cosine > 0.0 && trace_proxies(hit + hit_normal * 0.03, scene.sun_direction_radius.xyz, shadow_distance, blocker, blocker_normal)) {
 				cosine *= 1.0 - scene.sun.a;
 			}
 			light = m.emission.rgb + m.diffuse.rgb * scene.sun.rgb * cosine;

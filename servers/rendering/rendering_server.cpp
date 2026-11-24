@@ -2381,6 +2381,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("mesh_surface_remove", "mesh", "surface"), &RenderingServer::mesh_surface_remove);
 	ClassDB::bind_method(D_METHOD("mesh_clear", "mesh"), &RenderingServer::mesh_clear);
 
+	ClassDB::bind_method(D_METHOD("mesh_surface_set_gi_proxy_faces", "mesh", "surface", "faces"), &RenderingServer::mesh_surface_set_gi_proxy_faces);
 	ClassDB::bind_method(D_METHOD("mesh_surface_update_vertex_region", "mesh", "surface", "offset", "data"), &RenderingServer::mesh_surface_update_vertex_region);
 	ClassDB::bind_method(D_METHOD("mesh_surface_update_attribute_region", "mesh", "surface", "offset", "data"), &RenderingServer::mesh_surface_update_attribute_region);
 	ClassDB::bind_method(D_METHOD("mesh_surface_update_skin_region", "mesh", "surface", "offset", "data"), &RenderingServer::mesh_surface_update_skin_region);

@@ -1585,6 +1585,9 @@ bool RenderForwardClustered::_process_hybrid_gi(RenderDataRD *p_render_data, Ren
 	using Effect = RendererRD::HybridDiffuseGI;
 	LocalVector<RendererRD::HybridReflections::Proxy> proxies;
 	LocalVector<Effect::Material> materials;
+	LocalVector<const RendererRD::MeshStorage::GIProxyGeometry *> geometry_list;
+	HashMap<uint64_t, uint32_t> offsets;
+	uint32_t node_offset = 0;
 	const Transform3D view = p_render_data->scene_data->cam_transform.affine_inverse();
 	auto *meshes = RendererRD::MeshStorage::get_singleton();
 	for (RenderGeometryInstance *geometry : *p_render_data->raytracing_instances) {
@@ -1601,18 +1604,25 @@ bool RenderForwardClustered::_process_hybrid_gi(RenderDataRD *p_render_data, Ren
 					shader->uses_discard || shader->uses_alpha_clip || shader->uses_position || shader->writes_modelview_or_projection) {
 				continue;
 			}
-			AABB box = shader->uses_vertex ? meshes->mesh_get_custom_aabb(instance->data->base) : meshes->mesh_surface_get_aabb(surface->surface);
-			if (!box.has_surface()) {
+			const auto &mesh_proxy = meshes->mesh_get_gi_proxy(instance->data->base, surface->surface_index);
+			if (mesh_proxy.nodes.is_empty()) {
 				continue;
 			}
-			box = box.grow(0.001);
+			const uint32_t *existing = offsets.getptr(mesh_proxy.version);
+			const uint32_t offset = existing ? *existing : node_offset;
+			if (!existing) {
+				ERR_FAIL_COND_V(uint64_t(node_offset) + mesh_proxy.nodes.size() > UINT32_MAX / sizeof(RendererRD::MeshStorage::GIProxyNode), false);
+				offsets.insert(mesh_proxy.version, offset);
+				geometry_list.push_back(&mesh_proxy);
+				node_offset += mesh_proxy.nodes.size();
+			}
 			const Color albedo = shader->unshaded ? Color(0, 0, 0) : surface->material->raytracing_diffuse;
 			Color emission = shader->uses_emission ? surface->material->raytracing_emission : Color(0, 0, 0);
 			if (shader->unshaded) {
 				emission += surface->material->raytracing_diffuse;
 			}
-			materials.push_back({ { albedo.r, albedo.g, albedo.b, 0 }, { emission.r, emission.g, emission.b, 0 } });
-			proxies.push_back({ materials.size(), box, transform });
+			materials.push_back({ { albedo.r, albedo.g, albedo.b, 0 }, { emission.r, emission.g, emission.b, 0 }, { offset, uint32_t(mesh_proxy.nodes.size()), 0, 0 } });
+			proxies.push_back({ materials.size(), mesh_proxy.bounds, transform });
 		}
 	}
 
@@ -1642,7 +1652,7 @@ bool RenderForwardClustered::_process_hybrid_gi(RenderDataRD *p_render_data, Ren
 		hybrid_gi = memnew(Effect);
 	}
 	bool rendered = hybrid_gi->render(p_render_data->render_buffers, r_buffers.hybrid_gi_buffers, *p_render_data->scene_data,
-			p_render_data->environment, p_normals, proxies, materials, direction, sun, environment_get_ssao_enabled(p_render_data->environment), MAX(0.025f, environment_get_ssil_radius(p_render_data->environment)), environment_get_ssil_intensity(p_render_data->environment));
+			p_render_data->environment, p_normals, proxies, materials, geometry_list, direction, sun, environment_get_ssao_enabled(p_render_data->environment), MAX(0.025f, environment_get_ssil_radius(p_render_data->environment)), environment_get_ssil_intensity(p_render_data->environment));
 	if (rendered) {
 		RENDER_TIMESTAMP("Hybrid Diffuse GI");
 	}

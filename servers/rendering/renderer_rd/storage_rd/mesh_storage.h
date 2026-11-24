@@ -43,6 +43,20 @@ namespace RendererRD {
 
 class MeshStorage : public RendererMeshStorage {
 public:
+	// A threaded local-space BVH. Leaves carry triangle vertices, branches carry traversal bounds.
+	struct GIProxyNode {
+		float a[3];
+		uint32_t end;
+		float b[3];
+		uint32_t triangle;
+		float c[4];
+	};
+	struct GIProxyGeometry {
+		Vector<GIProxyNode> nodes;
+		AABB bounds;
+		uint64_t version = 0;
+	};
+
 	enum DefaultRDBuffer {
 		DEFAULT_RD_BUFFER_VERTEX,
 		DEFAULT_RD_BUFFER_NORMAL,
@@ -84,6 +98,8 @@ private:
 			uint32_t vertex_buffer_size = 0;
 			RID raytracing_blas;
 			bool raytracing_build_input = false;
+			GIProxyGeometry gi_proxy;
+			Vector<Vector3> gi_proxy_faces;
 
 			RID attribute_buffer;
 			uint32_t attribute_buffer_size = 0;
@@ -455,6 +471,8 @@ public:
 		uint32_t index_stride = 0;
 	};
 
+	virtual void mesh_surface_set_gi_proxy_faces(RID p_mesh, int p_surface, const Vector<Vector3> &p_faces) override;
+	const GIProxyGeometry &mesh_get_gi_proxy(RID p_mesh, uint32_t p_surface);
 	bool mesh_surface_get_raytracing_geometry(void *p_surface, RaytracingGeometry &r_geometry);
 
 	_FORCE_INLINE_ RSE::PrimitiveType mesh_surface_get_primitive(void *p_surface) {

@@ -33,6 +33,7 @@
 #include "hybrid_reflections.h"
 
 #include "servers/rendering/renderer_rd/shaders/effects/hybrid_diffuse_gi.glsl.gen.h"
+#include "servers/rendering/renderer_rd/storage_rd/mesh_storage.h"
 #include "servers/rendering/renderer_scene_render.h"
 
 namespace RendererRD {
@@ -42,10 +43,13 @@ public:
 	struct Material {
 		float diffuse[4];
 		float emission[4];
+		uint32_t geometry[4] = {};
 	};
 	struct Buffers {
 		RID nodes;
 		RID materials;
+		RID triangles;
+		Vector<uint64_t> geometry_versions;
 		RID uniforms[RendererSceneRender::MAX_RENDER_VIEWS];
 		uint32_t capacity = 0;
 		uint64_t frame = 0;
@@ -60,7 +64,7 @@ public:
 	~HybridDiffuseGI();
 	bool render(const Ref<RenderSceneBuffersRD> &p_buffers, Buffers &r_data, const RenderSceneDataRD &p_scene, RID p_environment,
 			const RID *p_normals, LocalVector<HybridReflections::Proxy> &r_proxies, const LocalVector<Material> &p_materials,
-			const Vector3 &p_sun_direction, const Color &p_sun, bool p_use_ao, float p_radius, float p_intensity);
+			const LocalVector<const MeshStorage::GIProxyGeometry *> &p_geometry, const Vector3 &p_sun_direction, const Color &p_sun, bool p_use_ao, float p_radius, float p_intensity);
 
 private:
 	HybridDiffuseGiShaderRD shader;
