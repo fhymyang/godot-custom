@@ -14,7 +14,9 @@ layout(set = 0, binding = 0) uniform sampler2D opaque_depth;
 layout(set = 0, binding = 1) uniform sampler2D opaque_color;
 layout(set = 0, binding = 2) uniform sampler2D surface_depth;
 layout(set = 0, binding = 3) uniform sampler2D surface_normal;
-layout(rgba16f, set = 0, binding = 4) uniform restrict writeonly image2D reflection_output;
+layout(rgba16f, set = 0, binding = 4) uniform restrict image2D reflection_output;
+
+layout(rg32f, set = 0, binding = 9) uniform restrict writeonly image2D surface_hit;
 
 layout(set = 0, binding = 5, std140) uniform SceneData {
 	mat4 projection[2];
@@ -106,7 +108,8 @@ float surface_gap(vec2 uv, vec3 point) {
 
 float edge_weight(vec2 uv) {
 	vec2 edge = min(uv, 1.0 - uv);
-	return smoothstep(0.0, 0.05, min(edge.x, edge.y));
+	// Leave room for the probe to take over before a reflected source exits.
+	return smoothstep(0.0, 0.28, min(edge.x, edge.y));
 }
 
 vec4 sample_reflection(vec2 uv, float roughness, float weight) {
@@ -116,6 +119,7 @@ vec4 sample_reflection(vec2 uv, float roughness, float weight) {
 #ifdef SCREEN_TRACE
 
 shared vec4 quad_hits[64];
+shared uint unresolved[64];
 
 vec4 march(Surface surface, vec3 ray) {
 	vec3 origin = surface.position + surface.normal * 0.025;
@@ -152,7 +156,7 @@ vec4 march(Surface surface, vec3 ray) {
 		}
 		float gap = surface_gap(uv, point);
 		if (gap >= 0.0) {
-			for (int refine = 0; refine < 3; refine++) {
+			for (int refine = 0; refine < 5; refine++) {
 				float middle = 0.5 * (low + high);
 				point = origin + ray * middle;
 				vec2 middle_uv;
@@ -187,20 +191,15 @@ void main() {
 	if (active_surface) {
 		hit = march(surface, ray);
 	}
-	// A negative distance distinguishes a participating miss from an inactive lane.
-	quad_hits[lane] = active_surface && hit.w <= 0.0 ? vec4(0.0, 0.0, -1.0, 0.0) : hit;
+	quad_hits[lane] = hit;
 	barrier();
 
 	ivec2 quad = pixel & ~ivec2(1);
 	uint base_lane = lane - uint((pixel.x & 1) + 8 * (pixel.y & 1));
 	vec4 best_hit = vec4(0.0);
-	int first_active = -1;
 	int best_lane = -1;
 	for (int i = 0; i < 4; i++) {
 		vec4 candidate = quad_hits[base_lane + uint((i & 1) + 8 * (i >> 1))];
-		if (first_active < 0 && candidate.z != 0.0) {
-			first_active = i;
-		}
 		if (candidate.w > best_hit.w) {
 			best_hit = candidate;
 			best_lane = i;
@@ -220,12 +219,22 @@ void main() {
 	}
 
 	if (all(lessThan(pixel, size))) {
+		imageStore(surface_hit, pixel, vec4(active_surface ? texelFetch(surface_depth, pixel, 0).r : 0.0, 0.0, 0.0, 0.0));
 		imageStore(reflection_output, pixel, hit.w > 0.0 ? sample_reflection(hit.xy, surface.roughness, hit.w) : vec4(0.0));
 	}
 
-	if (params.node_count > 0 && best_lane < 0 && first_active == (pixel.x & 1) + 2 * (pixel.y & 1)) {
+	if (params.node_count == 0) {
+		return;
+	}
+	unresolved[lane] = uint(active_surface && hit.w < 0.995);
+	barrier();
+	if (lane == base_lane) {
+		uint mask = unresolved[lane] | (unresolved[lane + 1] << 1) | (unresolved[lane + 8] << 2) | (unresolved[lane + 9] << 3);
+		if (mask == 0u) {
+			return;
+		}
 		uint index = atomicAdd(dispatch.count, 1);
-		misses.pixels[index] = uint(pixel.x + pixel.y * size.x);
+		misses.pixels[index] = (uint(quad.x / 2 + quad.y / 2 * ((size.x + 1) / 2)) << 4) | mask;
 		uint group = index / 64;
 		atomicMax(dispatch.groups_x, min(group + 1, GROUPS_PER_ROW));
 		atomicMax(dispatch.groups_y, group / GROUPS_PER_ROW + 1);
@@ -255,7 +264,8 @@ vec2 box_interval(vec3 origin, vec3 ray, vec3 minimum, vec3 maximum) {
 	return vec2(max(entry.x, max(entry.y, entry.z)), min(exit.x, min(exit.y, exit.z)));
 }
 
-float trace_proxies(vec3 origin, vec3 ray) {
+float trace_proxies(vec3 origin, vec3 ray, out bool displaced) {
+	displaced = false;
 	float nearest = MAX_TRAVEL;
 	uint index = 0;
 	while (index < params.node_count) {
@@ -275,7 +285,12 @@ float trace_proxies(vec3 origin, vec3 ray) {
 			interval = box_interval(box_origin, box_ray, vec3(0.0), vec3(1.0));
 			// Ignore boxes already containing the source, and prevent self-intersection.
 			if (interval.x > 0.10 && interval.y >= interval.x) {
-				nearest = min(nearest, interval.x);
+				// A conservative animation bound encloses the leaves. Its front face can be empty.
+				float hit = node.leaf == 2u ? (interval.x + interval.y) * 0.5 : interval.x;
+				if (hit < nearest) {
+					nearest = hit;
+					displaced = node.leaf == 2u;
+				}
 			}
 		}
 		index++;
@@ -283,21 +298,15 @@ float trace_proxies(vec3 origin, vec3 ray) {
 	return nearest;
 }
 
-void main() {
-	uint index = (gl_WorkGroupID.y * GROUPS_PER_ROW + gl_WorkGroupID.x) * 64 + gl_LocalInvocationIndex;
-	if (index >= dispatch.count) {
-		return;
-	}
-	ivec2 size = imageSize(reflection_output);
-	uint pixel_index = misses.pixels[index];
-	ivec2 pixel = ivec2(pixel_index % uint(size.x), pixel_index / uint(size.x));
+void resolve_proxy(ivec2 pixel, ivec2 size) {
 	Surface surface;
 	if (!read_surface(pixel, size, surface)) {
 		return;
 	}
 	vec3 ray = reflection_direction(surface);
 	vec3 origin = surface.position + surface.normal * 0.025;
-	float travel = trace_proxies(origin, ray);
+	bool displaced;
+	float travel = trace_proxies(origin, ray, displaced);
 	if (travel >= MAX_TRAVEL) {
 		return;
 	}
@@ -307,25 +316,40 @@ void main() {
 	vec3 point = origin + ray * travel;
 	vec2 uv;
 	float visible = 0.0;
-	if (project_point(point, uv)) {
+	bool on_screen = project_point(point, uv);
+	if (on_screen && !displaced) {
 		float depth = textureLod(opaque_depth, uv, 0.0).r;
 		if (depth > 0.0) {
 			float gap = abs(view_position(uv, depth).z - point.z);
 			visible = edge_weight(uv) * (1.0 - smoothstep(0.08, 0.45 + 0.02 * travel, gap));
 		}
 	}
-	const float occlusion = 0.72;
-	vec4 color = vec4(0.0, 0.0, 0.0, occlusion);
-	if (visible > 0.0) {
-		color = mix(color, sample_reflection(uv, surface.roughness, 1.0), visible);
+	vec4 screen = imageLoad(reflection_output, pixel);
+	// A displaced bound encloses empty gaps. Its midpoint gives probe
+	// parallax, but it cannot confirm a second screen-space color sample.
+	if (displaced) {
+		screen *= screen.a;
 	}
+	vec4 proxy = visible > 0.0 ? sample_reflection(uv, surface.roughness, visible) : vec4(0.0);
+	imageStore(reflection_output, pixel, screen + (1.0 - screen.a) * proxy);
+	// Preserve the hit distance and tag rays supplied entirely by the offscreen probe.
+	imageStore(surface_hit, pixel, vec4(texelFetch(surface_depth, pixel, 0).r, on_screen ? travel : -travel, 0.0, 0.0));
+}
 
-	ivec2 quad = pixel & ~ivec2(1);
+void main() {
+	uint index = (gl_WorkGroupID.y * GROUPS_PER_ROW + gl_WorkGroupID.x) * 64 + gl_LocalInvocationIndex;
+	if (index >= dispatch.count) {
+		return;
+	}
+	ivec2 size = imageSize(reflection_output);
+	uint entry = misses.pixels[index];
+	uint quad_index = entry >> 4;
+	uint quad_width = uint((size.x + 1) / 2);
+	ivec2 quad = 2 * ivec2(quad_index % quad_width, quad_index / quad_width);
+	uint mask = entry & 15u;
 	for (int i = 0; i < 4; i++) {
-		ivec2 destination = quad + ivec2(i & 1, i >> 1);
-		Surface neighbor;
-		if (read_surface(destination, size, neighbor) && matching_surface(surface, neighbor)) {
-			imageStore(reflection_output, destination, color);
+		if ((mask & (1u << i)) != 0u) {
+			resolve_proxy(quad + ivec2(i & 1, i >> 1), size);
 		}
 	}
 }

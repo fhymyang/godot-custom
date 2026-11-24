@@ -1313,6 +1313,9 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 }
 
 void reflection_process(uint ref_index, vec3 vertex, hvec3 ref_vec, hvec3 normal, half roughness, hvec3 ambient_light,
+#ifdef HYBRID_REFLECTION_USED
+		float proxy_distance, float proxy_lod_bias,
+#endif
 #ifdef LIGHT_CLEARCOAT_USED
 		hvec3 cc_ref_vec, half cc_roughness, inout hvec4 cc_reflection_accum,
 #endif
@@ -1347,6 +1350,12 @@ void reflection_process(uint ref_index, vec3 vertex, hvec3 ref_vec, hvec3 normal
 			vec3 rbminmax = mix(rbmin, rbmax, greaterThan(nrdir, vec3(0.0, 0.0, 0.0)));
 
 			float fa = min(min(rbminmax.x, rbminmax.y), rbminmax.z);
+#ifdef HYBRID_REFLECTION_USED
+			// Sample the local probe in the direction of the traced object.
+			if (proxy_distance > 0.0) {
+				fa = min(fa, proxy_distance * length(local_ref_vec));
+			}
+#endif
 			vec3 posonbox = local_pos + nrdir * fa;
 			local_ref_vec = posonbox - reflections.data[ref_index].box_offset;
 		}
@@ -1355,6 +1364,9 @@ void reflection_process(uint ref_index, vec3 vertex, hvec3 ref_vec, hvec3 normal
 		half reflection_blend = max(half(0.0), blend - reflection_accum.a);
 
 		float roughness_lod = sqrt(roughness) * MAX_ROUGHNESS_LOD;
+#ifdef HYBRID_REFLECTION_USED
+		roughness_lod += proxy_lod_bias;
+#endif
 		vec2 reflection_uv = vec3_to_oct_with_border(local_ref_vec, border_size);
 		reflection.rgb = hvec3(textureLod(sampler2DArray(reflection_atlas, DEFAULT_SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP), vec3(reflection_uv, reflections.data[ref_index].index), roughness_lod).rgb) * REFLECTION_MULTIPLIER;
 		reflection.rgb *= half(reflections.data[ref_index].exposure_normalization);

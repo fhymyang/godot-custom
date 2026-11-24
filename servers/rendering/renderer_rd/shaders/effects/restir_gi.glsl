@@ -126,7 +126,9 @@ bool load_receiver(ivec2 pixel, out vec3 position, out vec3 normal) {
 		return false;
 	}
 	vec3 encoded_normal = texelFetch(normal_buffer, pixel, 0).xyz * 2.0 - 1.0;
-	if (dot(encoded_normal, encoded_normal) < 0.25) {
+	// The best-fit normal encoding scales valid normals before RGB8 quantization.
+	// Only reject a near-zero vector, which has no direction to normalize.
+	if (dot(encoded_normal, encoded_normal) < 0.0001) {
 		return false;
 	}
 	vec2 ndc = (vec2(pixel) + 0.5) / vec2(scene.size) * 2.0 - 1.0;
@@ -498,6 +500,7 @@ void main() {
 	vec3 light = vec3(0.0);
 	float total_weight = 0.0;
 	vec3 second_moment = vec3(0.0);
+	float squared_weights = 0.0;
 	if (load_receiver(pixel, receiver, normal)) {
 		for (int y = -1; y <= 1; y++) {
 			for (int x = -1; x <= 1; x++) {
@@ -519,6 +522,7 @@ void main() {
 				light += sample_light * weight;
 				second_moment += sample_light * sample_light * weight;
 				total_weight += weight;
+				squared_weights += weight * weight;
 			}
 		}
 	}
@@ -532,9 +536,14 @@ void main() {
 			if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
 				vec4 history = gather_history(uv, receiver, normal);
 				vec3 deviation = sqrt(max(second_moment / total_weight - light * light, vec3(0.0)));
-				vec3 clipped = clamp(history.rgb, light - deviation * 1.5, light + deviation * 1.5);
+				// A lone tap (or a run of missed rays) has zero measured variance.
+				// Let validated history decay over multiple frames in that case.
+				float effective_taps = total_weight * total_weight / max(squared_weights, 1e-10);
+				vec3 uncertainty = max(light, history.rgb) * inversesqrt(max(effective_taps, 1.0));
+				vec3 extent = 1.5 * deviation + uncertainty;
+				vec3 clipped = clamp(history.rgb, light - extent, light + extent);
 				// Reduce persistence when lighting moves outside the current neighborhood.
-				float change = length(history.rgb - clipped) / max(length(deviation) + length(light) * 0.1, 0.001);
+				float change = length(history.rgb - clipped) / max(length(extent) + length(light) * 0.1, 0.001);
 				float retained = min(history.a, 11.0) / (1.0 + change * change);
 				frames += retained;
 				light = mix(light, clipped, retained / frames);

@@ -39,8 +39,6 @@
 #define RPC_9 0.11111111111
 #define RPC_16 0.0625
 
-#define DISOCCLUSION_SCALE 0.01 // Scale the weight of this pixel calculated as (change in velocity - threshold) * scale.
-
 layout(local_size_x = GROUP_SIZE, local_size_y = GROUP_SIZE, local_size_z = 1) in;
 
 layout(rgba16f, set = 0, binding = 0) uniform restrict readonly image2D color_buffer;
@@ -50,10 +48,15 @@ layout(rg16f, set = 0, binding = 3) uniform restrict readonly image2D last_veloc
 layout(set = 0, binding = 4) uniform sampler2D history_buffer;
 layout(rgba16f, set = 0, binding = 5) uniform restrict writeonly image2D output_buffer;
 
+layout(set = 0, binding = 6) uniform sampler2D proxy_hits;
+
 layout(push_constant, std430) uniform Params {
 	vec2 resolution;
-	float disocclusion_threshold; // 0.1 / max(params.resolution.x, params.resolution.y)
+	float disocclusion_threshold; // Velocity mismatch in pixels that invalidates history.
 	float variance_dynamic;
+	uint has_proxy_hits;
+	float jitter_x;
+	float jitter_y;
 }
 params;
 
@@ -142,32 +145,19 @@ void populate_group_shared_memory(uvec2 group_id, uint group_index) {
 								VELOCITY
 ------------------------------------------------------------------------------*/
 
-void depth_test_min(uvec2 pos, inout float min_depth, inout uvec2 min_pos) {
-	float depth = load_depth(pos);
-
-	if (depth < min_depth) {
-		min_depth = depth;
-		min_pos = pos;
+// Reverse Z places the nearest surface at the largest depth. LDS coordinates
+// already include their border in load_depth(); image coordinates do not.
+vec2 closest_velocity(uvec2 pos_group, ivec2 pixel) {
+	float nearest = load_depth(pos_group);
+	ivec2 best_offset = ivec2(0);
+	for (int i = 0; i < 9; i++) {
+		float depth = load_depth(pos_group + kOffsets3x3[i]);
+		if (depth > nearest) {
+			nearest = depth;
+			best_offset = kOffsets3x3[i];
+		}
 	}
-}
-
-// Returns velocity with closest depth (3x3 neighborhood)
-void get_closest_pixel_velocity_3x3(in uvec2 group_pos, uvec2 group_top_left, out vec2 velocity) {
-	float min_depth = 1.0;
-	uvec2 min_pos = group_pos;
-
-	depth_test_min(group_pos + kOffsets3x3[0], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[1], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[2], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[3], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[4], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[5], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[6], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[7], min_depth, min_pos);
-	depth_test_min(group_pos + kOffsets3x3[8], min_depth, min_pos);
-
-	// Velocity out
-	velocity = imageLoad(velocity_buffer, ivec2(group_top_left + min_pos)).xy;
+	return imageLoad(velocity_buffer, clamp(pixel + best_offset, ivec2(0), ivec2(params.resolution) - 1)).xy;
 }
 
 /*------------------------------------------------------------------------------
@@ -261,7 +251,7 @@ vec3 clip_aabb(vec3 aabb_min, vec3 aabb_max, vec3 p, vec3 q) {
 }
 
 // Clip history to the neighbourhood of the current sample
-vec3 clip_history_3x3(uvec2 group_pos, vec3 color_history, vec2 velocity_closest) {
+vec3 clip_history_3x3(uvec2 group_pos, vec3 color_history, vec2 velocity_closest, float min_variance) {
 	// Sample a 3x3 neighbourhood
 	vec3 s1 = load_color(group_pos + kOffsets3x3[0]);
 	vec3 s2 = load_color(group_pos + kOffsets3x3[1]);
@@ -277,8 +267,8 @@ vec3 clip_history_3x3(uvec2 group_pos, vec3 color_history, vec2 velocity_closest
 	vec3 color_avg = (s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9) * RPC_9;
 	vec3 color_avg2 = ((s1 * s1) + (s2 * s2) + (s3 * s3) + (s4 * s4) + (s5 * s5) + (s6 * s6) + (s7 * s7) + (s8 * s8) + (s9 * s9)) * RPC_9;
 	// Use variance clipping as described in https://developer.download.nvidia.com/gameworks/events/GDC2016/msalvi_temporal_supersampling.pdf
-	float box_size = mix(0.0f, params.variance_dynamic, smoothstep(0.02f, 0.0f, length(velocity_closest)));
-	vec3 dev = sqrt(abs(color_avg2 - (color_avg * color_avg))) * box_size;
+	float box_size = mix(0.0f, params.variance_dynamic, (1.0f - smoothstep(0.0f, 0.02f, length(velocity_closest))));
+	vec3 dev = sqrt(abs(color_avg2 - (color_avg * color_avg))) * max(box_size, min_variance);
 	vec3 color_min = color_avg - dev;
 	vec3 color_max = color_avg + dev;
 
@@ -302,45 +292,71 @@ float luminance(vec3 color) {
 }
 
 // This is "velocity disocclusion" as described by https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/.
-// We use texel space, so our scale and threshold differ.
+// Compare in pixels so thin foreground edges can invalidate background history.
 float get_factor_disocclusion(vec2 uv_reprojected, vec2 velocity) {
 	vec2 velocity_previous = imageLoad(last_velocity_buffer, ivec2(uv_reprojected * params.resolution)).xy;
 	vec2 velocity_texels = velocity * params.resolution;
 	vec2 prev_velocity_texels = velocity_previous * params.resolution;
-	float disocclusion = length(prev_velocity_texels - velocity_texels) - params.disocclusion_threshold;
-	return clamp(disocclusion * DISOCCLUSION_SCALE, 0.0, 1.0);
+	return smoothstep(0.5, params.disocclusion_threshold, length(prev_velocity_texels - velocity_texels));
 }
 
-vec3 temporal_antialiasing(uvec2 pos_group_top_left, uvec2 pos_group, uvec2 pos_screen, vec2 uv, sampler2D tex_history) {
+vec3 receiver_tap(uvec2 pos_group, float receiver_depth, vec3 center) {
+	// A nearer opaque sample belongs to the foreground, in reverse Z.
+	return load_depth(pos_group) > receiver_depth + 0.000005 ? center : load_color(pos_group);
+}
+
+vec3 temporal_antialiasing(uvec2 pos_group, uvec2 pos_screen, vec2 uv, sampler2D tex_history) {
 	// Get the velocity of the current pixel
 	vec2 velocity = imageLoad(velocity_buffer, ivec2(pos_screen)).xy;
 
 	// Get reprojected uv
 	vec2 uv_reprojected = uv + velocity;
 
-	// Get input color
 	vec3 color_input = load_color(pos_group);
+	float receiver_depth = 0.0;
+	bool reflective_surface = false;
+	bool proxy_hit = false;
+	bool offscreen_proxy = false;
+	if (params.has_proxy_hits != 0u) {
+		vec2 hit = texelFetch(proxy_hits, ivec2(pos_screen), 0).rg;
+		receiver_depth = hit.x;
+		proxy_hit = hit.y != 0.0;
+		offscreen_proxy = hit.y < 0.0;
+		reflective_surface = hit.x > 0.0 && hit.x >= load_depth(pos_group) - 0.000005;
+	}
+	// Reconstruct the moving water at the output pixel center. Its current
+	// color was rasterized with the camera's subpixel projection offset.
+	// Estimate how many frames of valid history are available on this
+	// trajectory. Near an entering border, jitter has not averaged out yet.
+	vec2 distance_to_border = mix(uv, 1.0 - uv, greaterThanEqual(velocity, vec2(0.0)));
+	vec2 history_frames = distance_to_border / max(abs(velocity), vec2(1e-7));
+	float recently_visible = reflective_surface && !offscreen_proxy ? 1.0 - smoothstep(1.0, 12.0, min(history_frames.x, history_frames.y)) : 0.0;
+	if (recently_visible > 0.0) {
+		vec2 offset = vec2(params.jitter_x, params.jitter_y);
+		ivec2 step_dir = ivec2(sign(offset));
+		vec2 f = abs(offset);
+		vec3 row0 = mix(color_input, receiver_tap(pos_group + ivec2(step_dir.x, 0), receiver_depth, color_input), f.x);
+		vec3 row1 = mix(receiver_tap(pos_group + ivec2(0, step_dir.y), receiver_depth, color_input), receiver_tap(pos_group + step_dir, receiver_depth, color_input), f.x);
+		color_input = mix(color_input, mix(row0, row1, f.y), recently_visible);
+	}
+
+	// History and its velocity have no valid tap beyond the viewport.
+	if (any(lessThan(uv_reprojected, vec2(0.0))) || any(greaterThanEqual(uv_reprojected, vec2(1.0)))) {
+		return color_input;
+	}
 
 	// Get history color (catmull-rom reduces a lot of the blurring that you get under motion)
 	vec3 color_history = sample_catmull_rom_9(tex_history, uv_reprojected, params.resolution).rgb;
 
 	// Clip history to the neighbourhood of the current sample (fixes a lot of the ghosting).
-	vec2 velocity_closest = vec2(0.0); // This is best done by using the velocity with the closest depth.
-	get_closest_pixel_velocity_3x3(pos_group, pos_group_top_left, velocity_closest);
-	color_history = clip_history_3x3(pos_group, color_history, velocity_closest);
+	vec2 velocity_closest = closest_velocity(pos_group, ivec2(pos_screen));
+	// Fast camera motion otherwise collapses the clipping box to the current
+	// neighborhood mean, which flickers on refracted detail under TAA jitter.
+	color_history = clip_history_3x3(pos_group, color_history, velocity_closest, 0.85 * recently_visible);
 
 	// Compute blend factor
-	float blend_factor = RPC_16; // We want to be able to accumulate as many jitter samples as we generated, that is, 16.
-	{
-		// If re-projected UV is out of screen, converge to current color immediately.
-		float factor_screen = any(lessThan(uv_reprojected, vec2(0.0))) || any(greaterThan(uv_reprojected, vec2(1.0))) ? 1.0 : 0.0;
-
-		// Increase blend factor when there is disocclusion (fixes a lot of the remaining ghosting).
-		float factor_disocclusion = get_factor_disocclusion(uv_reprojected, velocity);
-
-		// Add to the blend factor
-		blend_factor = clamp(blend_factor + factor_screen + factor_disocclusion, 0.0, 1.0);
-	}
+	float blend_factor = RPC_16;
+	float disocclusion = get_factor_disocclusion(uv_reprojected, velocity);
 
 	// Resolve
 	vec3 color_resolved = vec3(0.0);
@@ -355,7 +371,13 @@ vec3 temporal_antialiasing(uvec2 pos_group_top_left, uvec2 pos_group, uvec2 pos_
 		float diff = abs(lum_color - lum_history) / max(lum_color, max(lum_history, 1.001));
 		diff = 1.0 - diff;
 		diff = diff * diff;
-		blend_factor = mix(0.0, blend_factor, diff);
+		blend_factor = mix(blend_factor * diff, 1.0, disocclusion);
+
+		// Receiver motion cannot fully reproject a reflected object.
+		if (reflective_surface && proxy_hit) {
+			float disagreement = abs(lum_color - lum_history) / max(max(lum_color, lum_history), 0.05);
+			blend_factor = max(blend_factor, smoothstep(0.03, 0.15, disagreement));
+		}
 
 		// Lerp/blend
 		color_resolved = mix(color_history, color_input, blend_factor);
@@ -376,10 +398,9 @@ void main() {
 	}
 
 	const uvec2 pos_group = gl_LocalInvocationID.xy;
-	const uvec2 pos_group_top_left = gl_WorkGroupID.xy * kGroupSize - kBorderSize;
 	const uvec2 pos_screen = gl_GlobalInvocationID.xy;
 	const vec2 uv = (gl_GlobalInvocationID.xy + 0.5f) / params.resolution;
 
-	vec3 result = temporal_antialiasing(pos_group_top_left, pos_group, pos_screen, uv, history_buffer);
+	vec3 result = temporal_antialiasing(pos_group, pos_screen, uv, history_buffer);
 	imageStore(output_buffer, ivec2(gl_GlobalInvocationID.xy), vec4(result, 1.0));
 }

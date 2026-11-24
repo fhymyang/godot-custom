@@ -68,7 +68,7 @@ private:
 
 		float blur_size_near;
 		float blur_size_far;
-		uint32_t pad[2];
+		float depth_offset[2];
 	};
 
 	enum BokehMode {
@@ -113,7 +113,7 @@ public:
 	BokehDOF(bool p_prefer_raster_effects);
 	~BokehDOF();
 
-	void bokeh_dof_compute(const BokehBuffers &p_buffers, RID p_camera_attributes, float p_cam_znear, float p_cam_zfar, bool p_cam_orthogonal);
+	void bokeh_dof_compute(const BokehBuffers &p_buffers, RID p_camera_attributes, float p_cam_znear, float p_cam_zfar, bool p_cam_orthogonal, Vector2 p_depth_offset);
 	void bokeh_dof_raster(const BokehBuffers &p_buffers, RID p_camera_attributes, float p_cam_znear, float p_cam_zfar, bool p_cam_orthogonal);
 };
 

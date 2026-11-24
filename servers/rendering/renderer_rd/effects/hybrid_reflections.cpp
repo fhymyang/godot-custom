@@ -88,7 +88,7 @@ void HybridReflections::_build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxie
 			}
 			r_nodes[index].to_box[row][3] = to_box.origin[row];
 		}
-		r_nodes[index].leaf = 1;
+		r_nodes[index].leaf = p_proxies[0].displaced ? 2 : 1;
 	} else {
 		const int axis = bounds.get_longest_axis_index();
 		const uint32_t middle = p_count / 2;
@@ -198,10 +198,11 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 		const RD::Uniform projection_uniform(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 5, r_data.projections);
 		const RD::Uniform queue(RD::UNIFORM_TYPE_STORAGE_BUFFER, 6, r_data.queue);
 		const RD::Uniform dispatch(RD::UNIFORM_TYPE_STORAGE_BUFFER, 7, r_data.dispatch);
+		const RD::Uniform hit(RD::UNIFORM_TYPE_IMAGE, 9, p_buffers.get_texture_slice(RB_SCOPE_HYBRID_REFLECTIONS, RB_HYBRID_REFLECTION_HIT, view, 0));
 		const RD::Uniform bvh(RD::UNIFORM_TYPE_STORAGE_BUFFER, 8, r_data.nodes);
 
-		const RID screen_set = uniforms->get_cache(shader.version_get_shader(version, PASS_SCREEN_TRACE), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch);
-		const RID fallback_set = uniforms->get_cache(shader.version_get_shader(version, PASS_FALLBACK), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch, bvh);
+		const RID screen_set = uniforms->get_cache(shader.version_get_shader(version, PASS_SCREEN_TRACE), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch, hit);
+		const RID fallback_set = uniforms->get_cache(shader.version_get_shader(version, PASS_FALLBACK), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch, bvh, hit);
 		if (!screen_set.is_valid() || !fallback_set.is_valid()) {
 			return false;
 		}

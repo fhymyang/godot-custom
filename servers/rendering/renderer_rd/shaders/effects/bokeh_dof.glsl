@@ -116,7 +116,7 @@ vec4 weighted_filter_dir(vec2 dir, vec2 uv, vec2 pixel_size) {
 void main() {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
 
-	if (any(greaterThan(pos, params.size))) { //too large, do nothing
+	if (any(greaterThanEqual(pos, params.size))) { //too large, do nothing
 		return;
 	}
 
@@ -128,6 +128,19 @@ void main() {
 	//precompute size in alpha channel
 	float depth = get_depth_at_pos(uv);
 	float size = get_blur_size(depth);
+	// The resolved color is on the output grid while the depth is still jittered.
+	// Blend blur radii across the footprint, not depths across an occlusion.
+	if (any(notEqual(params.depth_offset, vec2(0.0)))) {
+		vec2 extent = vec2(textureSize(source_depth, 0));
+		vec2 source = (uv + params.depth_offset) * extent - 0.5;
+		vec2 base_uv = (floor(source) + 0.5) / extent;
+		vec2 f = fract(source);
+		float a = get_blur_size(get_depth_at_pos(base_uv));
+		float b = get_blur_size(get_depth_at_pos(base_uv + vec2(1.0 / extent.x, 0.0)));
+		float c = get_blur_size(get_depth_at_pos(base_uv + vec2(0.0, 1.0 / extent.y)));
+		float d = get_blur_size(get_depth_at_pos(base_uv + 1.0 / extent));
+		size = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+	}
 
 	vec4 color = imageLoad(color_image, pos);
 	color.a = size;

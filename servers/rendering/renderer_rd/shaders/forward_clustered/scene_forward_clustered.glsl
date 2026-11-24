@@ -1294,19 +1294,22 @@ void fragment_shader(in SceneData scene_data) {
 	vec2 screen_uv = gl_FragCoord.xy * scene_data.screen_pixel_size;
 
 #ifdef HYBRID_REFLECTION_USED
+	float proxy_distance = 0.0;
 	vec4 hybrid_reflection = vec4(0.0, 0.0, 0.0, -1.0);
 #if defined(USE_HYBRID_REFLECTIONS) && !defined(MODE_RENDER_DEPTH)
 	if (bool(implementation_data.ss_effects_flags & SCREEN_SPACE_EFFECTS_FLAGS_USE_HYBRID_REFLECTIONS)) {
 		ivec2 pixel = ivec2(gl_FragCoord.xy);
 #ifdef USE_MULTIVIEW
-		float surface_depth = texelFetch(sampler2DArray(ssr_mip_level_buffer, SAMPLER_NEAREST_CLAMP), ivec3(pixel, ViewIndex), 0).r;
+		vec2 surface_hit = texelFetch(sampler2DArray(ssr_mip_level_buffer, SAMPLER_NEAREST_CLAMP), ivec3(pixel, ViewIndex), 0).rg;
 		vec4 reflection_sample = texelFetch(sampler2DArray(ssr_buffer, SAMPLER_NEAREST_CLAMP), ivec3(pixel, ViewIndex), 0);
 #else
-		float surface_depth = texelFetch(sampler2D(ssr_mip_level_buffer, SAMPLER_NEAREST_CLAMP), pixel, 0).r;
+		vec2 surface_hit = texelFetch(sampler2D(ssr_mip_level_buffer, SAMPLER_NEAREST_CLAMP), pixel, 0).rg;
 		vec4 reflection_sample = texelFetch(sampler2D(ssr_buffer, SAMPLER_NEAREST_CLAMP), pixel, 0);
 #endif
 		// A buffer hit belongs to the nearest participating transparent surface.
-		hybrid_reflection = surface_depth > 0.0 && abs(surface_depth - gl_FragCoord.z) < 0.000005 ? reflection_sample : vec4(0.0);
+		bool matches_surface = surface_hit.x > 0.0 && abs(surface_hit.x - gl_FragCoord.z) < 0.000005;
+		hybrid_reflection = matches_surface ? reflection_sample : vec4(0.0);
+		proxy_distance = matches_surface ? abs(surface_hit.y) : 0.0;
 	}
 #endif
 #endif
@@ -2086,6 +2089,18 @@ void fragment_shader(in SceneData scene_data) {
 		// Interpolate between mirror and rough reflection by using linear_roughness * linear_roughness.
 		ref_vec = mix(ref_vec, bent_normal, roughness * roughness * roughness * roughness);
 
+#ifdef HYBRID_REFLECTION_USED
+		float proxy_lod_bias = 0.0;
+		if (proxy_distance > 0.0) {
+			vec4 projected = projection_matrix * vec4(vertex + ref_vec * proxy_distance, 1.0);
+			vec2 ndc = abs(projected.xy / max(projected.w, 0.0001));
+			float edge = 1.0 - max(ndc.x, ndc.y);
+			// Filter high-frequency probe detail across the screen trace handoff.
+			// Restore the material LOD once the target is outside the transition.
+			proxy_lod_bias = 1.5 * smoothstep(-0.9, -0.02, edge) * (1.0 - smoothstep(0.0, 0.7, edge));
+		}
+#endif
+
 		for (uint i = item_from; i < item_to; i++) {
 			uint mask = cluster_buffer.data[cluster_reflection_offset + i];
 			mask &= cluster_get_range_clip_mask(i, item_min, item_max);
@@ -2116,6 +2131,9 @@ void fragment_shader(in SceneData scene_data) {
 #endif // LIGHT_CLEARCOAT_USED
 
 				reflection_process(reflection_index, vertex, ref_vec, normal, roughness, ambient_light,
+#ifdef HYBRID_REFLECTION_USED
+						proxy_distance, proxy_lod_bias,
+#endif
 #ifdef LIGHT_CLEARCOAT_USED
 						cc_ref_vec, mix(0.001, 0.1, clearcoat_roughness), cc_reflection_accum,
 #endif

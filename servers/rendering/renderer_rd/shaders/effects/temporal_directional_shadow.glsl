@@ -166,8 +166,9 @@ float reproject_history(vec3 receiver, vec3 moments, ivec2 size) {
 	for (int y = 0; y < 2; y++) {
 		for (int x = 0; x < 2; x++) {
 			vec4 tap = texelFetch(history, min(base + ivec2(x, y), size - 1), 0);
-			if (tap.z > 0.0 && abs(tap.y - depth) < depth_tolerance) {
+			if (tap.z == float(params.light_index + 1u) && abs(tap.y - depth) < depth_tolerance) {
 				float weight = (x == 0 ? 1.0 - fraction.x : fraction.x) * (y == 0 ? 1.0 - fraction.y : fraction.y);
+				weight *= 1.0 - smoothstep(0.5 * depth_tolerance, depth_tolerance, abs(tap.y - depth));
 				history_sum += tap.x * weight;
 				weight_sum += weight;
 			}
@@ -179,7 +180,7 @@ float reproject_history(vec3 receiver, vec3 moments, ivec2 size) {
 	float sigma = sqrt(max(0.0, moments.y - moments.x * moments.x));
 	float extent = sigma * mix(1.65, 0.70, moments.z) + 0.04;
 	float clipped = clamp(history_sum / weight_sum, moments.x - extent, moments.x + extent);
-	return clamp(mix(moments.x, clipped, params.history_weight * min(1.0, weight_sum * 2.0)), 0.0, 1.0);
+	return clamp(mix(moments.x, clipped, params.history_weight * weight_sum), 0.0, 1.0);
 }
 
 void main() {

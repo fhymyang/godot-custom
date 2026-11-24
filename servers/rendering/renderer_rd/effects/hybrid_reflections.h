@@ -35,6 +35,7 @@
 
 #define RB_SCOPE_HYBRID_REFLECTIONS SNAME("hybrid_reflections")
 #define RB_HYBRID_REFLECTION_DEPTH SNAME("surface_depth")
+#define RB_HYBRID_REFLECTION_HIT SNAME("surface_hit")
 #define RB_HYBRID_REFLECTION_NORMAL SNAME("surface_normal")
 #define RB_HYBRID_REFLECTION SNAME("reflection")
 
@@ -45,6 +46,7 @@ namespace RendererRD {
 class HybridReflections {
 public:
 	struct Proxy {
+		bool displaced;
 		AABB bounds;
 		Transform3D transform;
 	};

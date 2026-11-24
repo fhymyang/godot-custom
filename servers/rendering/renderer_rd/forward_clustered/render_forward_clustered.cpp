@@ -1478,7 +1478,9 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 			RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT, RD::TEXTURE_SAMPLES_1, size, views);
 	const RID reflection = rb->create_texture(RB_SCOPE_HYBRID_REFLECTIONS, RB_HYBRID_REFLECTION, RD::DATA_FORMAT_R16G16B16A16_SFLOAT,
 			RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT, RD::TEXTURE_SAMPLES_1, size, views);
-	if (depth.is_null() || normal.is_null() || reflection.is_null()) {
+	const RID hit = rb->create_texture(RB_SCOPE_HYBRID_REFLECTIONS, RB_HYBRID_REFLECTION_HIT, RD::DATA_FORMAT_R32G32_SFLOAT,
+			RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT, RD::TEXTURE_SAMPLES_1, size, views);
+	if (depth.is_null() || normal.is_null() || reflection.is_null() || hit.is_null()) {
 		return false;
 	}
 
@@ -1504,9 +1506,10 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 	LocalVector<RendererRD::HybridReflections::Proxy> proxies;
 	const Transform3D world_to_view = p_render_data->scene_data->cam_transform.affine_inverse();
 	RendererRD::MeshStorage *meshes = RendererRD::MeshStorage::get_singleton();
+	const uint32_t proxy_mask = GLOBAL_GET_CACHED(uint32_t, "rendering/environment/screen_space_reflection/hybrid_proxy_mask");
 	for (RenderGeometryInstance *geometry : *p_render_data->raytracing_instances) {
 		const GeometryInstanceForwardClustered *instance = static_cast<GeometryInstanceForwardClustered *>(geometry);
-		if (instance->mesh_instance.is_valid() || instance->force_alpha * instance->parent_fade_alpha < FADE_ALPHA_PASS_THRESHOLD ||
+		if (!(instance->layer_mask & proxy_mask) || instance->mesh_instance.is_valid() || instance->force_alpha * instance->parent_fade_alpha < FADE_ALPHA_PASS_THRESHOLD ||
 				instance->fade_near || instance->fade_far || instance->transform.basis.determinant() == 0.0) {
 			continue;
 		}
@@ -1516,11 +1519,15 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 			const SceneShaderForwardClustered::ShaderData *shader = surface->shader;
 			if (!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PRIMARY_MATERIAL) ||
 					!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE) || surface->primitive != RSE::PRIMITIVE_TRIANGLES ||
-					shader->uses_alpha_clip || shader->uses_discard || shader->uses_vertex || shader->uses_position ||
+					shader->uses_alpha_clip || shader->uses_discard || shader->uses_position ||
 					shader->writes_modelview_or_projection || shader->wireframe || shader->stencil_enabled) {
 				continue;
 			}
-			AABB bounds = meshes->mesh_surface_get_aabb(surface->surface);
+			// A displaced mesh needs an explicit conservative bound.
+			AABB bounds = shader->uses_vertex ? meshes->mesh_get_custom_aabb(instance->data->base) : meshes->mesh_surface_get_aabb(surface->surface);
+			if (bounds == AABB()) {
+				continue;
+			}
 			// Give planar surfaces a small thickness for the slab intersection.
 			for (int axis = 0; axis < 3; axis++) {
 				if (bounds.size[axis] < 0.001) {
@@ -1528,7 +1535,7 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 					bounds.size[axis] = 0.001;
 				}
 			}
-			proxies.push_back({ bounds, transform });
+			proxies.push_back({ shader->uses_vertex, bounds, transform });
 		}
 	}
 
@@ -2794,7 +2801,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		} else if (using_taa) {
 			RD::get_singleton()->draw_command_begin_label("TAA");
 			RENDER_TIMESTAMP("TAA");
-			taa->process(rb, rb->get_base_data_format(), p_render_data->scene_data->z_near, p_render_data->scene_data->z_far);
+			taa->process(rb, rb->get_base_data_format(), p_render_data->scene_data->z_near, p_render_data->scene_data->z_far, hybrid_reflections_ready, p_render_data->scene_data->taa_jitter);
 			RD::get_singleton()->draw_command_end_label();
 		}
 	}
@@ -4029,7 +4036,7 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 
 		RID ssr_mip_level;
 		if (p_use_hybrid_reflections) {
-			ssr_mip_level = rb->get_texture(RB_SCOPE_HYBRID_REFLECTIONS, RB_HYBRID_REFLECTION_DEPTH);
+			ssr_mip_level = rb->get_texture(RB_SCOPE_HYBRID_REFLECTIONS, RB_HYBRID_REFLECTION_HIT);
 		} else if (rb_data.is_valid() && !rb_data->ss_effects_data.ssr.half_size && rb->has_texture(RB_SCOPE_SSR, RB_MIP_LEVEL)) {
 			ssr_mip_level = rb->get_texture(RB_SCOPE_SSR, RB_MIP_LEVEL);
 		}

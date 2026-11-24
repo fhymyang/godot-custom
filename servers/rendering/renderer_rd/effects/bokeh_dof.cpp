@@ -90,7 +90,7 @@ BokehDOF::~BokehDOF() {
 	}
 }
 
-void BokehDOF::bokeh_dof_compute(const BokehBuffers &p_buffers, RID p_camera_attributes, float p_cam_znear, float p_cam_zfar, bool p_cam_orthogonal) {
+void BokehDOF::bokeh_dof_compute(const BokehBuffers &p_buffers, RID p_camera_attributes, float p_cam_znear, float p_cam_zfar, bool p_cam_orthogonal, Vector2 p_depth_offset) {
 	ERR_FAIL_COND_MSG(prefer_raster_effects, "Can't use compute version of bokeh depth of field with the mobile renderer.");
 
 	UniformSetCacheRD *uniform_set_cache = UniformSetCacheRD::get_singleton();
@@ -124,6 +124,8 @@ void BokehDOF::bokeh_dof_compute(const BokehBuffers &p_buffers, RID p_camera_att
 	bokeh.push_constant.use_physical_near = dof_near_size < 0.0;
 	bokeh.push_constant.blur_size_near = bokeh_size; // Only used with physically-based.
 
+	bokeh.push_constant.depth_offset[0] = p_depth_offset.x;
+	bokeh.push_constant.depth_offset[1] = p_depth_offset.y;
 	bokeh.push_constant.use_jitter = use_jitter;
 	bokeh.push_constant.jitter_seed = Math::randf() * 1000.0;
 

@@ -3781,6 +3781,7 @@ void RenderingServer::init() {
 
 	GLOBAL_DEF("rendering/environment/screen_space_reflection/half_size", true);
 	GLOBAL_DEF("rendering/environment/screen_space_reflection/hybrid_reflections", false);
+	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/environment/screen_space_reflection/hybrid_proxy_mask", PROPERTY_HINT_LAYERS_3D_RENDER), (1 << 20) - 1);
 
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/environment/subsurface_scattering/subsurface_scattering_quality", PROPERTY_HINT_ENUM, "Disabled (Fastest),Low (Fast),Medium (Average),High (Slow)"), 1);
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "rendering/environment/subsurface_scattering/subsurface_scattering_scale", PROPERTY_HINT_RANGE, "0.001,1,0.001"), 0.05);
