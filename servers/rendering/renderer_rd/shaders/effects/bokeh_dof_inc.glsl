@@ -25,6 +25,8 @@ layout(push_constant, std430) uniform Params {
 
 	float blur_size_near;
 	float blur_size_far;
+	float focus_gradient;
+	float focus_offset;
 	vec2 depth_offset;
 }
 params;

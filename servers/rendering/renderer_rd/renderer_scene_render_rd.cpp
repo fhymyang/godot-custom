@@ -514,17 +514,7 @@ void RendererSceneRenderRD::_render_buffers_post_process_and_tonemap(const Rende
 		buffers.half_texture[0] = rb->get_texture_slice(RB_SCOPE_BUFFERS, RB_TEX_BLUR_1, 0, 0);
 		buffers.half_texture[1] = rb->get_texture_slice(RB_SCOPE_BUFFERS, RB_TEX_BLUR_0, 0, 1);
 
-		if (can_use_storage) {
-			for (uint32_t i = 0; i < rb->get_view_count(); i++) {
-				buffers.base_texture = use_upscaled_texture ? rb->get_upscaled_texture(i) : rb->get_internal_texture(i);
-				buffers.depth_texture = rb->get_depth_texture(i);
-
-				// In stereo p_render_data->z_near and p_render_data->z_far can be offset for our combined frustum.
-				float z_near = p_render_data->scene_data->view_projection[i].get_z_near();
-				float z_far = p_render_data->scene_data->view_projection[i].get_z_far();
-				bokeh_dof->bokeh_dof_compute(buffers, p_render_data->camera_attributes, z_near, z_far, p_render_data->scene_data->cam_orthogonal, p_render_data->scene_data->taa_jitter * 0.5f);
-			};
-		} else {
+		if (!can_use_storage) {
 			// Set framebuffers.
 			buffers.secondary_fb = rb->weight_buffers[1].fb;
 			buffers.half_fb[0] = rb->weight_buffers[2].fb;
@@ -536,16 +526,23 @@ void RendererSceneRenderRD::_render_buffers_post_process_and_tonemap(const Rende
 
 			// Set weight buffers.
 			buffers.base_weight_fb = rb->weight_buffers[0].fb;
+		}
 
-			for (uint32_t i = 0; i < rb->get_view_count(); i++) {
-				buffers.base_texture = use_upscaled_texture ? rb->get_upscaled_texture(i) : rb->get_internal_texture(i);
+		float slope = RSG::camera_attributes->get_camera_attributes(p_render_data->camera_attributes)->dof_focus_slope;
+		bool orthogonal = p_render_data->scene_data->cam_orthogonal;
+		for (uint32_t i = 0; i < rb->get_view_count(); i++) {
+			const Projection &projection = p_render_data->scene_data->view_projection[i];
+			float gradient = slope / projection[1][1];
+			float offset = orthogonal ? -projection[3][1] : projection[2][1];
+			buffers.focus_coefficients = Vector2(gradient, gradient * offset);
+			buffers.base_texture = use_upscaled_texture ? rb->get_upscaled_texture(i) : rb->get_internal_texture(i);
+			if (can_use_storage) {
+				buffers.depth_texture = rb->get_depth_texture(i);
+				bokeh_dof->bokeh_dof_compute(buffers, p_render_data->camera_attributes, projection.get_z_near(), projection.get_z_far(), orthogonal, p_render_data->scene_data->taa_jitter * 0.5f);
+			} else {
 				buffers.depth_texture = p_use_msaa ? rb->get_texture_slice(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH, i, 0) : rb->get_depth_texture(i);
-				buffers.base_fb = FramebufferCacheRD::get_singleton()->get_cache(buffers.base_texture); // TODO move this into bokeh_dof_raster, we can do this internally
-
-				// In stereo p_render_data->z_near and p_render_data->z_far can be offset for our combined frustum.
-				float z_near = p_render_data->scene_data->view_projection[i].get_z_near();
-				float z_far = p_render_data->scene_data->view_projection[i].get_z_far();
-				bokeh_dof->bokeh_dof_raster(buffers, p_render_data->camera_attributes, z_near, z_far, p_render_data->scene_data->cam_orthogonal);
+				buffers.base_fb = FramebufferCacheRD::get_singleton()->get_cache(buffers.base_texture);
+				bokeh_dof->bokeh_dof_raster(buffers, p_render_data->camera_attributes, projection.get_z_near(), projection.get_z_far(), orthogonal);
 			}
 		}
 		RD::get_singleton()->draw_command_end_label();

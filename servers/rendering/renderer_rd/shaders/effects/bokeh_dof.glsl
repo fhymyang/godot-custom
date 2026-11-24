@@ -36,7 +36,9 @@ float get_depth_at_pos(vec2 uv) {
 	} else {
 		depth = 2.0 * params.z_near * params.z_far / (params.z_far + params.z_near + depth * (params.z_far - params.z_near));
 	}
-	return depth;
+	// Evaluate the near/far focus bands against view depth minus slope * view height.
+	float tilt = (1.0 - 2.0 * uv.y) * params.focus_gradient + params.focus_offset;
+	return max(depth - tilt * (params.orthogonal ? 1.0 : depth), 0.0001);
 }
 
 float get_blur_size(float depth) {

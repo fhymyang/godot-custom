@@ -55,6 +55,7 @@ private:
 		bool dof_blur_near_enabled = false;
 		float dof_blur_near_distance = 2;
 		float dof_blur_near_transition = 1;
+		float dof_focus_slope = 0.0f;
 		float dof_blur_amount = 0.1;
 	};
 
@@ -81,6 +82,7 @@ public:
 	void camera_attributes_set_dof_blur_quality(RSE::DOFBlurQuality p_quality, bool p_use_jitter);
 	void camera_attributes_set_dof_blur_bokeh_shape(RSE::DOFBokehShape p_shape);
 
+	void camera_attributes_set_dof_focus_tilt(RID p_camera_attributes, float p_degrees);
 	void camera_attributes_set_dof_blur(RID p_camera_attributes, bool p_far_enable, float p_far_distance, float p_far_transition, bool p_near_enable, float p_near_distance, float p_near_transition, float p_amount);
 	bool camera_attributes_get_dof_far_enabled(RID p_camera_attributes);
 	float camera_attributes_get_dof_far_distance(RID p_camera_attributes);

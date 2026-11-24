@@ -68,6 +68,8 @@ private:
 
 		float blur_size_near;
 		float blur_size_far;
+		float focus_gradient;
+		float focus_offset;
 		float depth_offset[2];
 	};
 
@@ -96,6 +98,7 @@ public:
 		// bokeh buffers
 
 		// textures
+		Vector2 focus_coefficients;
 		Size2i base_texture_size;
 		RID base_texture;
 		RID depth_texture;

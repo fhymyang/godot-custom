@@ -87,6 +87,7 @@ private:
 	float dof_blur_near_distance = 2.0;
 	float dof_blur_near_transition = 1.0;
 
+	float dof_focus_tilt = 0.0f;
 	float dof_blur_amount = 0.1;
 	void _update_dof_blur();
 
@@ -111,6 +112,8 @@ public:
 	float get_dof_blur_near_distance() const;
 	void set_dof_blur_near_transition(float p_distance);
 	float get_dof_blur_near_transition() const;
+	void set_dof_focus_tilt(float p_degrees);
+	float get_dof_focus_tilt() const { return dof_focus_tilt; }
 	void set_dof_blur_amount(float p_amount);
 	float get_dof_blur_amount() const;
 

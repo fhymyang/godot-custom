@@ -66,6 +66,12 @@ void RendererCameraAttributes::camera_attributes_set_dof_blur_bokeh_shape(RSE::D
 	dof_blur_bokeh_shape = p_shape;
 }
 
+void RendererCameraAttributes::camera_attributes_set_dof_focus_tilt(RID p_camera_attributes, float p_degrees) {
+	CameraAttributes *attributes = camera_attributes_owner.get_or_null(p_camera_attributes);
+	ERR_FAIL_NULL(attributes);
+	attributes->dof_focus_slope = Math::tan(Math::deg_to_rad(CLAMP(p_degrees, -75.0f, 75.0f)));
+}
+
 void RendererCameraAttributes::camera_attributes_set_dof_blur(RID p_camera_attributes, bool p_far_enable, float p_far_distance, float p_far_transition, bool p_near_enable, float p_near_distance, float p_near_transition, float p_amount) {
 	CameraAttributes *cam_attributes = camera_attributes_owner.get_or_null(p_camera_attributes);
 	ERR_FAIL_NULL(cam_attributes);

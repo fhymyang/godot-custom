@@ -112,6 +112,8 @@ void BokehDOF::bokeh_dof_compute(const BokehBuffers &p_buffers, RID p_camera_att
 
 	// setup our push constant
 	memset(&bokeh.push_constant, 0, sizeof(BokehPushConstant));
+	bokeh.push_constant.focus_gradient = p_buffers.focus_coefficients.x;
+	bokeh.push_constant.focus_offset = p_buffers.focus_coefficients.y;
 	bokeh.push_constant.blur_far_active = dof_far;
 	bokeh.push_constant.blur_far_begin = dof_far_begin;
 	bokeh.push_constant.blur_far_end = dof_far_begin + dof_far_size; // Only used with non-physically-based.
@@ -319,6 +321,8 @@ void BokehDOF::bokeh_dof_raster(const BokehBuffers &p_buffers, RID p_camera_attr
 
 	// setup our base push constant
 	memset(&bokeh.push_constant, 0, sizeof(BokehPushConstant));
+	bokeh.push_constant.focus_gradient = p_buffers.focus_coefficients.x;
+	bokeh.push_constant.focus_offset = p_buffers.focus_coefficients.y;
 
 	bokeh.push_constant.orthogonal = p_cam_orthogonal;
 	bokeh.push_constant.size[0] = p_buffers.base_texture_size.width;

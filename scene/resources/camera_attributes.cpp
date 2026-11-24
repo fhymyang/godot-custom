@@ -204,6 +204,11 @@ float CameraAttributesPractical::get_dof_blur_near_transition() const {
 	return dof_blur_near_transition;
 }
 
+void CameraAttributesPractical::set_dof_focus_tilt(float p_degrees) {
+	dof_focus_tilt = CLAMP(p_degrees, -75.0f, 75.0f);
+	RS::get_singleton()->camera_attributes_set_dof_focus_tilt(get_rid(), dof_focus_tilt);
+}
+
 void CameraAttributesPractical::set_dof_blur_amount(float p_amount) {
 	dof_blur_amount = p_amount;
 	_update_dof_blur();
@@ -284,6 +289,8 @@ void CameraAttributesPractical::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_dof_blur_near_distance"), &CameraAttributesPractical::get_dof_blur_near_distance);
 	ClassDB::bind_method(D_METHOD("set_dof_blur_near_transition", "distance"), &CameraAttributesPractical::set_dof_blur_near_transition);
 	ClassDB::bind_method(D_METHOD("get_dof_blur_near_transition"), &CameraAttributesPractical::get_dof_blur_near_transition);
+	ClassDB::bind_method(D_METHOD("set_dof_focus_tilt", "degrees"), &CameraAttributesPractical::set_dof_focus_tilt);
+	ClassDB::bind_method(D_METHOD("get_dof_focus_tilt"), &CameraAttributesPractical::get_dof_focus_tilt);
 	ClassDB::bind_method(D_METHOD("set_dof_blur_amount", "amount"), &CameraAttributesPractical::set_dof_blur_amount);
 	ClassDB::bind_method(D_METHOD("get_dof_blur_amount"), &CameraAttributesPractical::get_dof_blur_amount);
 
@@ -300,6 +307,8 @@ void CameraAttributesPractical::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_blur_near_distance", PROPERTY_HINT_RANGE, "0.01,8192,0.01,exp,suffix:m"), "set_dof_blur_near_distance", "get_dof_blur_near_distance");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_blur_near_transition", PROPERTY_HINT_RANGE, "-1,8192,0.01"), "set_dof_blur_near_transition", "get_dof_blur_near_transition");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_blur_amount", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_dof_blur_amount", "get_dof_blur_amount");
+
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_focus_tilt", PROPERTY_HINT_RANGE, "-75,75,0.1,degrees"), "set_dof_focus_tilt", "get_dof_focus_tilt");
 
 	ADD_GROUP("Auto Exposure", "auto_exposure_");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "auto_exposure_min_sensitivity", PROPERTY_HINT_RANGE, "0,1600,0.01,or_greater,suffic:ISO"), "set_auto_exposure_min_sensitivity", "get_auto_exposure_min_sensitivity");

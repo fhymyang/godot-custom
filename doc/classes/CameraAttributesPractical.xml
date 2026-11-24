@@ -43,5 +43,8 @@
 		<member name="dof_blur_near_transition" type="float" setter="set_dof_blur_near_transition" getter="get_dof_blur_near_transition" default="1.0">
 			When positive, distance over which blur effect will scale from 0 to [member dof_blur_amount], ending at [member dof_blur_near_distance]. When negative, uses physically-based scaling so depth of field effect will scale from 0 at [member dof_blur_near_distance] and will increase in a physically accurate way as objects get closer to the [Camera3D].
 		</member>
+		<member name="dof_focus_tilt" type="float" setter="set_dof_focus_tilt" getter="get_dof_focus_tilt" default="0.0">
+			Tilts the focus plane around the camera's horizontal axis in degrees. Positive values move the top of the plane farther from the camera. Near and far distances are measured along the optical axis.
+		</member>
 	</members>
 </class>
