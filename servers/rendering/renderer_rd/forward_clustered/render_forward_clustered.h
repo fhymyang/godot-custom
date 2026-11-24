@@ -35,6 +35,7 @@
 #include "servers/rendering/renderer_rd/cluster_builder_rd.h"
 #include "servers/rendering/renderer_rd/effects/fsr2.h"
 #include "servers/rendering/renderer_rd/effects/hybrid_reflections.h"
+#include "servers/rendering/renderer_rd/effects/hybrid_diffuse_gi.h"
 #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
 #include "servers/rendering/renderer_rd/effects/restir_gi.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
@@ -120,6 +121,7 @@ public:
 		} ss_effects_data;
 
 		RendererRD::RestirGI::RenderBuffers restir_gi_buffers;
+		RendererRD::HybridDiffuseGI::Buffers hybrid_gi_buffers;
 		RendererRD::HybridReflections::RenderBuffers hybrid_reflection_buffers;
 		RendererRD::TemporalDirectionalShadow::History directional_shadow_history;
 
@@ -756,6 +758,7 @@ private:
 	RendererRD::TemporalDirectionalShadow *temporal_directional_shadow = nullptr;
 	RendererRD::FSR2Effect *fsr2_effect = nullptr;
 	RendererRD::SSEffects *ss_effects = nullptr;
+	RendererRD::HybridDiffuseGI *hybrid_gi = nullptr;
 	RendererRD::RestirGI *restir_gi = nullptr;
 	RendererRD::HybridReflections *hybrid_reflections = nullptr;
 	bool hybrid_reflections_enabled = false;
@@ -789,6 +792,7 @@ private:
 	/* Render Scene */
 	void _process_ssao(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections);
 	bool _process_hybrid_reflections(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, uint32_t p_uniform_index, bool p_reverse_cull, const RendererRD::MaterialStorage::Samplers &p_samplers);
+	bool _process_hybrid_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals);
 	bool _process_restir_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals);
 	void _process_ssil(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections, const Transform3D &p_transform);
 	void _process_ssr(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_slices, const Projection *p_projections, const Vector3 *p_eye_offsets, const Transform3D &p_transform);

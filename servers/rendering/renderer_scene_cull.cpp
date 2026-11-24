@@ -3708,7 +3708,9 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 			scene_render->supports_restir_gi() && scene_render->environment_get_ssil_enabled(p_environment) &&
 			(scene_render->environment_get_ssil_use_restir(p_environment) || scene_render->environment_get_ssil_use_monte_carlo(p_environment));
 	const bool use_hybrid_reflections = p_reflection_probe.is_null() && scene_render->uses_hybrid_reflections();
-	if (use_raytraced_ssil || use_hybrid_reflections) {
+	const bool use_hybrid_gi = p_reflection_probe.is_null() && p_environment.is_valid() && scene_render->environment_get_ssil_enabled(p_environment) &&
+			GLOBAL_GET_CACHED(bool, "rendering/environment/ssil/use_hybrid_diffuse_gi");
+	if (use_raytraced_ssil || use_hybrid_reflections || use_hybrid_gi) {
 		constexpr uint32_t excluded_flags = InstanceData::FLAG_CAST_SHADOWS_ONLY | InstanceData::FLAG_USES_MESH_INSTANCE |
 				InstanceData::FLAG_VISIBILITY_DEPENDENCY_HIDDEN | InstanceData::FLAG_VISIBILITY_DEPENDENCY_HIDDEN_CLOSE_RANGE;
 		for (uint64_t i = 0; i < scenario->instance_data.size(); i++) {
@@ -3722,7 +3724,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 	}
 
 	RENDER_TIMESTAMP("Render 3D Scene");
-	scene_render->render_scene(p_render_buffers, p_camera_data, prev_camera_data, scene_cull_result.geometry_instances, scene_cull_result.light_instances, scene_cull_result.reflections, scene_cull_result.voxel_gi_instances, scene_cull_result.decals, scene_cull_result.lightmaps, scene_cull_result.fog_volumes, p_environment, camera_attributes, p_compositor, p_shadow_atlas, occluders_tex, p_reflection_probe.is_valid() ? RID() : scenario->reflection_atlas, p_reflection_probe, p_reflection_probe_pass, p_screen_mesh_lod_threshold, render_shadow_data, max_shadows_used, render_sdfgi_data, cull.sdfgi.region_count, p_window_output_max_value, &sdfgi_update_data, r_render_info, (use_raytraced_ssil || use_hybrid_reflections) ? &raytracing_instances : nullptr);
+	scene_render->render_scene(p_render_buffers, p_camera_data, prev_camera_data, scene_cull_result.geometry_instances, scene_cull_result.light_instances, scene_cull_result.reflections, scene_cull_result.voxel_gi_instances, scene_cull_result.decals, scene_cull_result.lightmaps, scene_cull_result.fog_volumes, p_environment, camera_attributes, p_compositor, p_shadow_atlas, occluders_tex, p_reflection_probe.is_valid() ? RID() : scenario->reflection_atlas, p_reflection_probe, p_reflection_probe_pass, p_screen_mesh_lod_threshold, render_shadow_data, max_shadows_used, render_sdfgi_data, cull.sdfgi.region_count, p_window_output_max_value, &sdfgi_update_data, r_render_info, (use_raytraced_ssil || use_hybrid_reflections || use_hybrid_gi) ? &raytracing_instances : nullptr);
 
 	if (p_viewport.is_valid()) {
 		RSG::viewport->viewport_set_prev_camera_data(p_viewport, p_camera_data);

@@ -2980,6 +2980,9 @@
 		<member name="rendering/environment/ssil/quality" type="int" setter="" getter="" default="2">
 			Sets the quality of the screen-space indirect lighting effect. Higher values take more samples and so will result in better quality, at the cost of performance. Setting to [code]Ultra[/code] will use the [member rendering/environment/ssil/adaptive_target] setting.
 		</member>
+		<member name="rendering/environment/ssil/use_hybrid_diffuse_gi" type="bool" setter="" getter="" default="false">
+			When SSIL is enabled in Forward+, samples diffuse lighting at quarter resolution along each axis. Screen-space rays fall back to software tracing against mesh bounds. Directional lighting samples are reconstructed using spherical harmonics and temporal filtering.
+		</member>
 		<member name="rendering/environment/subsurface_scattering/subsurface_scattering_depth_scale" type="float" setter="" getter="" default="0.01">
 			Scales the depth over which the subsurface scattering effect is applied. A high value may allow light to scatter into a part of the mesh or another mesh that is close in screen space but far in depth. See also [member rendering/environment/subsurface_scattering/subsurface_scattering_scale].
 			[b]Note:[/b] This property is only read when the project starts. To set the subsurface scattering depth scale at runtime, call [method RenderingServer.sub_surface_scattering_set_scale] instead.

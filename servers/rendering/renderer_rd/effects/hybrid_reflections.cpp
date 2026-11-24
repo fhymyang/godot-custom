@@ -72,7 +72,7 @@ HybridReflections::~HybridReflections() {
 	shader.version_free(version);
 }
 
-void HybridReflections::_build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxies, uint32_t p_count) {
+void HybridReflections::build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxies, uint32_t p_count) {
 	AABB bounds = p_proxies[0].transform.xform(p_proxies[0].bounds);
 	for (uint32_t i = 1; i < p_count; i++) {
 		bounds.merge_with(p_proxies[i].transform.xform(p_proxies[i].bounds));
@@ -94,15 +94,15 @@ void HybridReflections::_build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxie
 			}
 			r_nodes[index].to_box[row][3] = to_box.origin[row];
 		}
-		r_nodes[index].leaf = p_proxies[0].displaced ? 2 : 1;
+		r_nodes[index].leaf = p_proxies[0].leaf;
 	} else {
 		const int axis = bounds.get_longest_axis_index();
 		const uint32_t middle = p_count / 2;
 		std::nth_element(p_proxies, p_proxies + middle, p_proxies + p_count, [axis](const Proxy &p_a, const Proxy &p_b) {
 			return p_a.transform.xform(p_a.bounds.get_center())[axis] < p_b.transform.xform(p_b.bounds.get_center())[axis];
 		});
-		_build_nodes(r_nodes, p_proxies, middle);
-		_build_nodes(r_nodes, p_proxies + middle, p_count - middle);
+		build_nodes(r_nodes, p_proxies, middle);
+		build_nodes(r_nodes, p_proxies + middle, p_count - middle);
 	}
 	// The escape index allows depth-first traversal without a per-ray stack.
 	r_nodes[index].end = r_nodes.size();
@@ -125,7 +125,7 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 	LocalVector<Node> nodes;
 	if (!r_proxies.is_empty()) {
 		nodes.reserve(r_proxies.size() * 2 - 1);
-		_build_nodes(nodes, r_proxies.ptr(), r_proxies.size());
+		build_nodes(nodes, r_proxies.ptr(), r_proxies.size());
 	}
 
 	if (!r_data.projections.is_valid()) {

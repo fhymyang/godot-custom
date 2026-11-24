@@ -46,7 +46,7 @@ namespace RendererRD {
 class HybridReflections {
 public:
 	struct Proxy {
-		bool displaced;
+		uint32_t leaf; // Nonzero payload for the BVH leaf.
 		AABB bounds;
 		Transform3D transform;
 	};
@@ -69,14 +69,6 @@ public:
 
 	bool render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r_data, const RenderSceneDataRD &p_scene, LocalVector<Proxy> &r_proxies, bool p_hardware);
 
-private:
-	enum Pass {
-		PASS_SCREEN_TRACE,
-		PASS_FALLBACK,
-		PASS_HARDWARE,
-		PASS_COUNT,
-	};
-
 	struct Node {
 		float minimum[3];
 		uint32_t end;
@@ -85,7 +77,15 @@ private:
 		float to_box[3][4];
 	};
 
-	static void _build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxies, uint32_t p_count);
+	static void build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxies, uint32_t p_count);
+
+private:
+	enum Pass {
+		PASS_SCREEN_TRACE,
+		PASS_FALLBACK,
+		PASS_HARDWARE,
+		PASS_COUNT,
+	};
 
 	HybridReflectionsShaderRD shader;
 	RID version;

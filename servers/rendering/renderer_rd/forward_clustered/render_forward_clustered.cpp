@@ -118,6 +118,7 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
 		render_buffers->clear_context(RB_SCOPE_RESTIR_GI);
 		render_buffers->clear_context(RB_SCOPE_HYBRID_REFLECTIONS);
 		hybrid_reflection_buffers.clear();
+		hybrid_gi_buffers.clear();
 		render_buffers->clear_context(SNAME("temporal_directional_shadow"));
 		directional_shadow_history = {};
 		restir_gi_buffers.clear();
@@ -1547,7 +1548,7 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 					bounds.size[axis] = 0.001;
 				}
 			}
-			proxies.push_back({ shader->uses_vertex, bounds, transform });
+			proxies.push_back({ shader->uses_vertex ? 2u : 1u, bounds, transform });
 		}
 	}
 
@@ -1578,6 +1579,74 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 
 bool RenderForwardClustered::supports_restir_gi() const {
 	return RD::get_singleton()->has_feature(RD::SUPPORTS_RAY_QUERY);
+}
+
+bool RenderForwardClustered::_process_hybrid_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals) {
+	using Effect = RendererRD::HybridDiffuseGI;
+	LocalVector<RendererRD::HybridReflections::Proxy> proxies;
+	LocalVector<Effect::Material> materials;
+	const Transform3D view = p_render_data->scene_data->cam_transform.affine_inverse();
+	auto *meshes = RendererRD::MeshStorage::get_singleton();
+	for (RenderGeometryInstance *geometry : *p_render_data->raytracing_instances) {
+		const auto *instance = static_cast<GeometryInstanceForwardClustered *>(geometry);
+		if (instance->mesh_instance.is_valid() || instance->force_alpha * instance->parent_fade_alpha < FADE_ALPHA_PASS_THRESHOLD ||
+				instance->transform.basis.determinant() == 0.0) {
+			continue;
+		}
+		const Transform3D transform = view * instance->transform;
+		for (const GeometryInstanceSurfaceDataCache *surface = instance->surface_caches; surface; surface = surface->next) {
+			const auto *shader = surface->shader;
+			if (!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PRIMARY_MATERIAL) ||
+					!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE) || surface->primitive != RSE::PRIMITIVE_TRIANGLES ||
+					shader->uses_discard || shader->uses_alpha_clip || shader->uses_position || shader->writes_modelview_or_projection) {
+				continue;
+			}
+			AABB box = shader->uses_vertex ? meshes->mesh_get_custom_aabb(instance->data->base) : meshes->mesh_surface_get_aabb(surface->surface);
+			if (!box.has_surface()) {
+				continue;
+			}
+			box = box.grow(0.001);
+			const Color albedo = shader->unshaded ? Color(0, 0, 0) : surface->material->raytracing_diffuse;
+			Color emission = shader->uses_emission ? surface->material->raytracing_emission : Color(0, 0, 0);
+			if (shader->unshaded) {
+				emission += surface->material->raytracing_diffuse;
+			}
+			materials.push_back({ { albedo.r, albedo.g, albedo.b, 0 }, { emission.r, emission.g, emission.b, 0 } });
+			proxies.push_back({ materials.size(), box, transform });
+		}
+	}
+
+	// Screen hits already include all raster lighting. Shade hidden proxies with the dominant directional light.
+	auto *lights = RendererRD::LightStorage::get_singleton();
+	Vector3 direction;
+	Color sun(0, 0, 0);
+	float strongest = 0.0f;
+	const float exposure = p_render_data->camera_attributes.is_valid() ? RSG::camera_attributes->camera_attributes_get_exposure_normalization_factor(p_render_data->camera_attributes) : 1.0f;
+	for (uint64_t i = 0; i < p_render_data->lights->size(); i++) {
+		const RID light_instance = (*p_render_data->lights)[i];
+		RID light = lights->light_instance_get_base_light(light_instance);
+		if (lights->light_get_type(light) != RSE::LIGHT_DIRECTIONAL || lights->light_is_negative(light) ||
+				lights->light_directional_get_sky_mode(light) == RSE::LIGHT_DIRECTIONAL_SKY_MODE_SKY_ONLY) {
+			continue;
+		}
+		float energy = lights->light_get_param(light, RSE::LIGHT_PARAM_ENERGY) * lights->light_get_param(light, RSE::LIGHT_PARAM_INDIRECT_ENERGY);
+		Color radiance = lights->light_get_color(light).srgb_to_linear() * energy;
+		if (radiance.get_luminance() > strongest) {
+			strongest = radiance.get_luminance();
+			sun = radiance * exposure;
+			sun.a = lights->light_has_shadow(light) ? lights->light_get_param(light, RSE::LIGHT_PARAM_SHADOW_OPACITY) : 0.0f;
+			direction = view.basis.xform(lights->light_instance_get_base_transform(light_instance).basis.get_column(2)).normalized();
+		}
+	}
+	if (!hybrid_gi) {
+		hybrid_gi = memnew(Effect);
+	}
+	bool rendered = hybrid_gi->render(p_render_data->render_buffers, r_buffers.hybrid_gi_buffers, *p_render_data->scene_data,
+			p_render_data->environment, p_normals, proxies, materials, direction, sun, environment_get_ssao_enabled(p_render_data->environment), MAX(0.025f, environment_get_ssil_radius(p_render_data->environment)), environment_get_ssil_intensity(p_render_data->environment));
+	if (rendered) {
+		RENDER_TIMESTAMP("Hybrid Diffuse GI");
+	}
+	return rendered;
 }
 
 bool RenderForwardClustered::_process_restir_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals) {
@@ -1870,9 +1939,33 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		// drawcalls per eye/view. It will all sync up at the barrier.
 
 		bool use_legacy_ssil = p_use_ssil;
-		if (p_use_ssil && p_render_data->raytracing_instances && supports_restir_gi() &&
+		const bool use_hybrid_gi = get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_UNSHADED && p_use_ssil && p_render_data->raytracing_instances && GLOBAL_GET_CACHED(bool, "rendering/environment/ssil/use_hybrid_diffuse_gi");
+		if (!use_hybrid_gi && p_use_ssil && p_render_data->raytracing_instances && supports_restir_gi() &&
 				(environment_get_ssil_use_restir(p_render_data->environment) || environment_get_ssil_use_monte_carlo(p_render_data->environment)) && get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_UNSHADED) {
 			use_legacy_ssil = !_process_restir_gi(p_render_data, **rb_data, p_normal_roughness_slices);
+		}
+		if (use_legacy_ssil || p_use_ssr) {
+			ss_effects->allocate_last_frame_buffer(rb, use_legacy_ssil, p_use_ssr);
+		}
+		if (p_use_ssao || (use_legacy_ssil && !use_hybrid_gi)) {
+			RENDER_TIMESTAMP("Prepare Depth for SSAO/SSIL");
+			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+				ss_effects->downsample_depth(rb, v, p_render_data->scene_data->view_projection[v]);
+			}
+		}
+		if (p_use_ssao) {
+			_process_ssao(rb, p_render_data->environment, p_normal_roughness_slices, p_render_data->scene_data->view_projection);
+		}
+		if (use_hybrid_gi) {
+			use_legacy_ssil = !_process_hybrid_gi(p_render_data, **rb_data, p_normal_roughness_slices);
+			if (use_legacy_ssil && !p_use_ssao) {
+				for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+					ss_effects->downsample_depth(rb, v, p_render_data->scene_data->view_projection[v]);
+				}
+			}
+		} else if (rb_data->hybrid_gi_buffers.size != Size2i()) {
+			rb_data->hybrid_gi_buffers.clear();
+			rb->clear_context(SNAME("hybrid_diffuse_gi"));
 		}
 		if (!p_use_ssil || use_legacy_ssil) {
 			rb->clear_context(RB_SCOPE_RESTIR_GI);
@@ -1880,25 +1973,8 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 				rb_data->restir_gi_buffers.clear();
 			}
 		}
-
-		if (use_legacy_ssil || p_use_ssr) {
-			ss_effects->allocate_last_frame_buffer(rb, use_legacy_ssil, p_use_ssr);
-		}
-
-		if (p_use_ssao || use_legacy_ssil) {
-			RENDER_TIMESTAMP("Prepare Depth for SSAO/SSIL");
-			// Convert our depth buffer data to linear data in
-			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
-				ss_effects->downsample_depth(rb, v, p_render_data->scene_data->view_projection[v]);
-			}
-
-			if (p_use_ssao) {
-				_process_ssao(rb, p_render_data->environment, p_normal_roughness_slices, p_render_data->scene_data->view_projection);
-			}
-
-			if (use_legacy_ssil) {
-				_process_ssil(rb, p_render_data->environment, p_normal_roughness_slices, p_render_data->scene_data->view_projection, p_render_data->scene_data->cam_transform);
-			}
+		if (use_legacy_ssil) {
+			_process_ssil(rb, p_render_data->environment, p_normal_roughness_slices, p_render_data->scene_data->view_projection, p_render_data->scene_data->cam_transform);
 		}
 
 		if (p_use_ssr) {
@@ -2739,7 +2815,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	RD::get_singleton()->draw_command_begin_label("Copy Framebuffer for SSIL/SSR");
 	const bool using_legacy_ssil = using_ssil && rb.is_valid() && !rb->has_texture(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING);
-	if (using_legacy_ssil || using_ssr) {
+	if (using_legacy_ssil || using_ssr || (using_ssil && rb_data.is_valid() && rb_data->hybrid_gi_buffers.size != Size2i() && rb_data->hybrid_gi_buffers.frame == RSG::rasterizer->get_frame_number())) {
 		RENDER_TIMESTAMP("Copy Final Framebuffer (SSIL/SSR)");
 		_copy_framebuffer_to_ss_effects(rb, using_legacy_ssil, using_ssr);
 	}
@@ -5577,6 +5653,9 @@ RenderForwardClustered::RenderForwardClustered() {
 RenderForwardClustered::~RenderForwardClustered() {
 	if (temporal_directional_shadow) {
 		memdelete(temporal_directional_shadow);
+	}
+	if (hybrid_gi) {
+		memdelete(hybrid_gi);
 	}
 	if (restir_gi) {
 		memdelete(restir_gi);
