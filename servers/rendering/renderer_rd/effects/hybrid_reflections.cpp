@@ -40,11 +40,13 @@ using namespace RendererRD;
 
 void HybridReflections::RenderBuffers::clear() {
 	RD *rd = RD::get_singleton();
-	for (RID buffer : { queue, dispatch, nodes, projections }) {
+	for (RID buffer : { queue, dispatch, nodes, projections, tlas }) {
 		if (buffer.is_valid()) {
 			rd->free_rid(buffer);
 		}
 	}
+	tlas = RID();
+	tlas_capacity = 0;
 	queue = RID();
 	dispatch = RID();
 	nodes = RID();
@@ -58,7 +60,11 @@ HybridReflections::RenderBuffers::~RenderBuffers() {
 }
 
 HybridReflections::HybridReflections() {
-	shader.initialize({ "\n#define SCREEN_TRACE\n", "\n#define PROXY_TRACE\n" });
+	Vector<String> variants = { "\n#define SCREEN_TRACE\n", "\n#define PROXY_TRACE\n" };
+	if (RD::get_singleton()->has_feature(RD::SUPPORTS_RAY_QUERY)) {
+		variants.push_back("\n#define HARDWARE_TRACE\n");
+	}
+	shader.initialize(variants);
 	version = shader.version_create();
 }
 
@@ -102,7 +108,7 @@ void HybridReflections::_build_nodes(LocalVector<Node> &r_nodes, Proxy *p_proxie
 	r_nodes[index].end = r_nodes.size();
 }
 
-bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r_data, const RenderSceneDataRD &p_scene, LocalVector<Proxy> &r_proxies) {
+bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r_data, const RenderSceneDataRD &p_scene, LocalVector<Proxy> &r_proxies, bool p_hardware) {
 	RD *rd = RD::get_singleton();
 	UniformSetCacheRD *uniforms = UniformSetCacheRD::get_singleton();
 	const Size2i size = p_buffers.get_internal_size();
@@ -136,7 +142,7 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 		r_data.queue_capacity = r_data.queue.is_valid() ? capacity : 0;
 	}
 	const uint32_t node_count = MAX(1u, nodes.size());
-	if (r_data.node_capacity < node_count) {
+	if (!p_hardware && r_data.node_capacity < node_count) {
 		if (r_data.nodes.is_valid()) {
 			rd->free_rid(r_data.nodes);
 		}
@@ -145,7 +151,8 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 		r_data.node_capacity = r_data.nodes.is_valid() ? node_capacity : 0;
 	}
 
-	for (int pass = 0; pass < PASS_COUNT; pass++) {
+	const Pass fallback = p_hardware ? PASS_HARDWARE : PASS_FALLBACK;
+	for (Pass pass : { PASS_SCREEN_TRACE, fallback }) {
 		if (!pipelines[pass].is_valid()) {
 			const RID variant = shader.version_get_shader(version, pass);
 			if (variant.is_valid()) {
@@ -154,8 +161,8 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 		}
 	}
 
-	if (!r_data.projections.is_valid() || !r_data.dispatch.is_valid() || !r_data.queue.is_valid() || !r_data.nodes.is_valid() ||
-			!pipelines[PASS_SCREEN_TRACE].is_valid() || !pipelines[PASS_FALLBACK].is_valid()) {
+	if (!r_data.projections.is_valid() || !r_data.dispatch.is_valid() || !r_data.queue.is_valid() || (!p_hardware && !r_data.nodes.is_valid()) ||
+			!pipelines[PASS_SCREEN_TRACE].is_valid() || !pipelines[fallback].is_valid()) {
 		return false;
 	}
 
@@ -182,7 +189,7 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 			uint32_t nodes;
 			uint32_t orthogonal;
 			uint32_t pad;
-		} push = { view, nodes.size(), p_scene.cam_orthogonal, 0 };
+		} push = { view, p_hardware ? 1u : nodes.size(), p_scene.cam_orthogonal, 0 };
 		const uint32_t dispatch_args[] = { 0, 1, 1, 0 };
 		if (rd->buffer_update(r_data.dispatch, 0, sizeof(dispatch_args), dispatch_args) != OK) {
 			return false;
@@ -199,10 +206,10 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 		const RD::Uniform queue(RD::UNIFORM_TYPE_STORAGE_BUFFER, 6, r_data.queue);
 		const RD::Uniform dispatch(RD::UNIFORM_TYPE_STORAGE_BUFFER, 7, r_data.dispatch);
 		const RD::Uniform hit(RD::UNIFORM_TYPE_IMAGE, 9, p_buffers.get_texture_slice(RB_SCOPE_HYBRID_REFLECTIONS, RB_HYBRID_REFLECTION_HIT, view, 0));
-		const RD::Uniform bvh(RD::UNIFORM_TYPE_STORAGE_BUFFER, 8, r_data.nodes);
+		const RD::Uniform bvh(p_hardware ? RD::UNIFORM_TYPE_ACCELERATION_STRUCTURE : RD::UNIFORM_TYPE_STORAGE_BUFFER, 8, p_hardware ? r_data.tlas : r_data.nodes);
 
 		const RID screen_set = uniforms->get_cache(shader.version_get_shader(version, PASS_SCREEN_TRACE), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch, hit);
-		const RID fallback_set = uniforms->get_cache(shader.version_get_shader(version, PASS_FALLBACK), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch, bvh, hit);
+		const RID fallback_set = uniforms->get_cache(shader.version_get_shader(version, fallback), 0, opaque_depth, opaque_color, surface_depth, surface_normal, reflection, projection_uniform, queue, dispatch, bvh, hit);
 		if (!screen_set.is_valid() || !fallback_set.is_valid()) {
 			return false;
 		}
@@ -214,9 +221,9 @@ bool HybridReflections::render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r
 		rd->compute_list_dispatch_threads(list, size.x, size.y, 1);
 		rd->compute_list_end();
 
-		if (!nodes.is_empty()) {
+		if (p_hardware || !nodes.is_empty()) {
 			list = rd->compute_list_begin();
-			rd->compute_list_bind_compute_pipeline(list, pipelines[PASS_FALLBACK]);
+			rd->compute_list_bind_compute_pipeline(list, pipelines[fallback]);
 			rd->compute_list_bind_uniform_set(list, fallback_set, 0);
 			rd->compute_list_set_push_constant(list, &push, sizeof(push));
 			rd->compute_list_dispatch_indirect(list, r_data.dispatch, 0);

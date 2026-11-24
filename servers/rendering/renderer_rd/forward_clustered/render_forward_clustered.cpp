@@ -1506,6 +1506,8 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 	LocalVector<RendererRD::HybridReflections::Proxy> proxies;
 	const Transform3D world_to_view = p_render_data->scene_data->cam_transform.affine_inverse();
 	RendererRD::MeshStorage *meshes = RendererRD::MeshStorage::get_singleton();
+	const bool use_ray_queries = GLOBAL_GET_CACHED(bool, "rendering/environment/screen_space_reflection/use_ray_queries") && rd->has_feature(RD::SUPPORTS_RAY_QUERY);
+	LocalVector<RD::AccelerationStructureInstance> triangles;
 	const uint32_t proxy_mask = GLOBAL_GET_CACHED(uint32_t, "rendering/environment/screen_space_reflection/hybrid_proxy_mask");
 	for (RenderGeometryInstance *geometry : *p_render_data->raytracing_instances) {
 		const GeometryInstanceForwardClustered *instance = static_cast<GeometryInstanceForwardClustered *>(geometry);
@@ -1521,6 +1523,16 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 					!(surface->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE) || surface->primitive != RSE::PRIMITIVE_TRIANGLES ||
 					shader->uses_alpha_clip || shader->uses_discard || shader->uses_position ||
 					shader->writes_modelview_or_projection || shader->wireframe || shader->stencil_enabled) {
+				continue;
+			}
+			if (use_ray_queries) {
+				RendererRD::MeshStorage::RaytracingGeometry geometry_data;
+				if (!shader->uses_vertex && meshes->mesh_surface_get_raytracing_geometry(surface->surface, geometry_data)) {
+					RD::AccelerationStructureInstance triangle_instance;
+					triangle_instance.transform = transform * geometry_data.vertex_transform;
+					triangle_instance.blas = geometry_data.blas;
+					triangles.push_back(triangle_instance);
+				}
 				continue;
 			}
 			// A displaced mesh needs an explicit conservative bound.
@@ -1539,11 +1551,27 @@ bool RenderForwardClustered::_process_hybrid_reflections(RenderDataRD *p_render_
 		}
 	}
 
+	auto &buffers = r_buffers.hybrid_reflection_buffers;
+	bool hardware_ready = false;
+	if (!triangles.is_empty()) {
+		if (buffers.tlas_capacity < triangles.size()) {
+			if (buffers.tlas.is_valid()) {
+				rd->free_rid(buffers.tlas);
+			}
+			uint32_t capacity = Math::next_power_of_2(triangles.size());
+			buffers.tlas = rd->tlas_create(capacity, RD::ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT);
+			buffers.tlas_capacity = buffers.tlas.is_valid() ? capacity : 0;
+		}
+		hardware_ready = buffers.tlas.is_valid() && rd->tlas_build(buffers.tlas, Span(triangles.ptr(), triangles.size())) == OK;
+	}
 	if (!hybrid_reflections) {
 		hybrid_reflections = memnew(RendererRD::HybridReflections);
 	}
 	rd->draw_command_begin_label("Hybrid Reflection Trace");
-	const bool rendered = hybrid_reflections->render(**rb, r_buffers.hybrid_reflection_buffers, *p_render_data->scene_data, proxies);
+	const bool rendered = hybrid_reflections->render(**rb, buffers, *p_render_data->scene_data, proxies, hardware_ready);
+	if (rendered && (hardware_ready || !proxies.is_empty())) {
+		RENDER_TIMESTAMP(hardware_ready ? "Hybrid Reflection Ray Query" : "Hybrid Reflection Proxies");
+	}
 	rd->draw_command_end_label();
 	return rendered;
 }

@@ -1,8 +1,12 @@
 #[compute]
 
-#version 450
+#version 460
 
 #VERSION_DEFINES
+
+#ifdef HARDWARE_TRACE
+#extension GL_EXT_ray_query : require
+#endif
 
 #ifdef SCREEN_TRACE
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -243,6 +247,18 @@ void main() {
 
 #else
 
+#ifdef HARDWARE_TRACE
+layout(set = 0, binding = 8) uniform accelerationStructureEXT reflection_scene;
+
+float trace_scene(vec3 origin, vec3 direction, out bool displaced) {
+	displaced = false;
+	rayQueryEXT query;
+	rayQueryInitializeEXT(query, reflection_scene, gl_RayFlagsOpaqueEXT, 0xff, origin, 0.10, direction, MAX_TRAVEL);
+	while (rayQueryProceedEXT(query)) {
+	}
+	return rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? rayQueryGetIntersectionTEXT(query, true) : MAX_TRAVEL;
+}
+#else
 struct Node {
 	vec3 minimum;
 	uint end;
@@ -264,7 +280,7 @@ vec2 box_interval(vec3 origin, vec3 ray, vec3 minimum, vec3 maximum) {
 	return vec2(max(entry.x, max(entry.y, entry.z)), min(exit.x, min(exit.y, exit.z)));
 }
 
-float trace_proxies(vec3 origin, vec3 ray, out bool displaced) {
+float trace_scene(vec3 origin, vec3 ray, out bool displaced) {
 	displaced = false;
 	float nearest = MAX_TRAVEL;
 	uint index = 0;
@@ -298,7 +314,9 @@ float trace_proxies(vec3 origin, vec3 ray, out bool displaced) {
 	return nearest;
 }
 
-void resolve_proxy(ivec2 pixel, ivec2 size) {
+#endif
+
+void resolve_reflection(ivec2 pixel, ivec2 size) {
 	Surface surface;
 	if (!read_surface(pixel, size, surface)) {
 		return;
@@ -306,7 +324,7 @@ void resolve_proxy(ivec2 pixel, ivec2 size) {
 	vec3 ray = reflection_direction(surface);
 	vec3 origin = surface.position + surface.normal * 0.025;
 	bool displaced;
-	float travel = trace_proxies(origin, ray, displaced);
+	float travel = trace_scene(origin, ray, displaced);
 	if (travel >= MAX_TRAVEL) {
 		return;
 	}
@@ -349,7 +367,7 @@ void main() {
 	uint mask = entry & 15u;
 	for (int i = 0; i < 4; i++) {
 		if ((mask & (1u << i)) != 0u) {
-			resolve_proxy(quad + ivec2(i & 1, i >> 1), size);
+			resolve_reflection(quad + ivec2(i & 1, i >> 1), size);
 		}
 	}
 }

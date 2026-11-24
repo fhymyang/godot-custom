@@ -52,6 +52,8 @@ public:
 	};
 
 	struct RenderBuffers {
+		RID tlas;
+		uint32_t tlas_capacity = 0;
 		RID queue;
 		RID dispatch;
 		RID nodes;
@@ -65,12 +67,13 @@ public:
 	HybridReflections();
 	~HybridReflections();
 
-	bool render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r_data, const RenderSceneDataRD &p_scene, LocalVector<Proxy> &r_proxies);
+	bool render(RenderSceneBuffersRD &p_buffers, RenderBuffers &r_data, const RenderSceneDataRD &p_scene, LocalVector<Proxy> &r_proxies, bool p_hardware);
 
 private:
 	enum Pass {
 		PASS_SCREEN_TRACE,
 		PASS_FALLBACK,
+		PASS_HARDWARE,
 		PASS_COUNT,
 	};
 
