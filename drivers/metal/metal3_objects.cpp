@@ -112,6 +112,32 @@ void MDCommandBuffer::end() {
 	}
 }
 
+void MDCommandBuffer::write_timestamp(MTL::CounterSampleBuffer *p_samples, MTL::Buffer *p_scratch, MTL::Event *p_order_event, uint64_t &r_order_value, uint32_t p_index, bool p_sample_at_blit) {
+	end();
+	MTL::CommandBuffer *cb = command_buffer();
+	// Independent Metal encoders may overlap on the GPU. Order the sample
+	// after earlier work and before later work to match the graph boundary.
+	cb->encodeSignalEvent(p_order_event, ++r_order_value);
+	cb->encodeWait(p_order_event, r_order_value);
+	if (p_sample_at_blit) {
+		MTL::BlitCommandEncoder *encoder = cb->blitCommandEncoder();
+		encoder->sampleCountersInBuffer(p_samples, p_index, true);
+		encoder->endEncoding();
+	} else {
+		MTL::BlitPassDescriptor *pass = MTL::BlitPassDescriptor::blitPassDescriptor();
+		auto *attachment = pass->sampleBufferAttachments()->object(0);
+		attachment->setSampleBuffer(p_samples);
+		attachment->setStartOfEncoderSampleIndex(MTL::CounterDontSample);
+		attachment->setEndOfEncoderSampleIndex(p_index);
+		MTL::BlitCommandEncoder *encoder = cb->blitCommandEncoder(pass);
+		// Metal can discard an empty blit pass, including its counter samples.
+		encoder->fillBuffer(p_scratch, NS::Range::Make(0, 4), 0);
+		encoder->endEncoding();
+	}
+	cb->encodeSignalEvent(p_order_event, ++r_order_value);
+	cb->encodeWait(p_order_event, r_order_value);
+}
+
 void MDCommandBuffer::commit() {
 	end();
 	if (use_barriers) {

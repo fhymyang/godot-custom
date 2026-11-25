@@ -31,11 +31,12 @@
 #include "restir_gi.h"
 
 #include "servers/rendering/renderer_rd/environment/gi.h"
-
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
+#include "servers/rendering/rendering_server_globals.h"
+#include "servers/rendering/storage/utilities.h"
 
 using namespace RendererRD;
 
@@ -275,10 +276,24 @@ bool RestirGI::render(const Ref<RenderSceneBuffersRD> &p_buffers, RenderBuffers 
 			sets[PASS_SPATIAL] = uniform_sets->get_cache(shader_rids[PASS_SPATIAL], 0, scene_uniform, tlas_uniform, surfaces_uniform, current_geometry, spatial_output);
 		}
 		sets[resolve] = uniform_sets->get_cache(shader_rids[resolve], 0, scene_uniform, depth_uniform, normal_uniform, half_light_uniform, resolve_output, history_uniform, previous_light_uniform, current_light_uniform);
+		static constexpr const char *pass_names[PASS_COUNT] = {
+			"SHaRC Update",
+			"SHaRC Resolve",
+			"ReSTIR GI Temporal Resampling",
+			"ReSTIR GI Spatial Resampling",
+			"ReSTIR GI Resolve",
+			"Monte Carlo GI Trace",
+			"Monte Carlo GI Resolve",
+			"ReSTIR GI Temporal Resampling (SDFGI)",
+		};
 		for (int i = first_pass; i <= resolve; i++) {
 			if (sets[i].is_null()) {
 				return false;
 			}
+		}
+		RENDER_TIMESTAMP(p_monte_carlo ? "> Monte Carlo GI Compute Passes" : "> ReSTIR GI Compute Passes");
+		for (int i = first_pass; i <= resolve; i++) {
+			RENDER_TIMESTAMP(pass_names[use_sdfgi && i == PASS_TEMPORAL ? PASS_TEMPORAL_SDFGI : i]);
 			const RD::ComputeListID compute_list = rd->compute_list_begin();
 			rd->compute_list_bind_compute_pipeline(compute_list, pipeline_rids[i]);
 			rd->compute_list_bind_uniform_set(compute_list, sets[i], 0);
@@ -299,6 +314,7 @@ bool RestirGI::render(const Ref<RenderSceneBuffersRD> &p_buffers, RenderBuffers 
 			rd->compute_list_dispatch_threads(compute_list, dispatch_size.x, dispatch_size.y, 1);
 			rd->compute_list_end();
 		}
+		RENDER_TIMESTAMP(p_monte_carlo ? "< Monte Carlo GI Compute Passes" : "< ReSTIR GI Compute Passes");
 		r_buffers.previous_projections[view] = projection;
 	}
 

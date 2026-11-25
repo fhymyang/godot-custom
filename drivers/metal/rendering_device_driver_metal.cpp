@@ -2461,32 +2461,6 @@ void RenderingDeviceDriverMetal::command_trace_rays(CommandBufferID p_cmd_buffer
 	ERR_FAIL_MSG("The Metal driver supports ray queries through compute pipelines.");
 }
 
-#pragma mark - Queries
-
-// ----- TIMESTAMP -----
-
-RDD::QueryPoolID RenderingDeviceDriverMetal::timestamp_query_pool_create(uint32_t p_query_count) {
-	return QueryPoolID(1);
-}
-
-void RenderingDeviceDriverMetal::timestamp_query_pool_free(QueryPoolID p_pool_id) {
-}
-
-void RenderingDeviceDriverMetal::timestamp_query_pool_get_results(QueryPoolID p_pool_id, uint32_t p_query_count, uint64_t *r_results) {
-	// Metal doesn't support timestamp queries, so we just clear the buffer.
-	bzero(r_results, p_query_count * sizeof(uint64_t));
-}
-
-uint64_t RenderingDeviceDriverMetal::timestamp_query_result_to_time(uint64_t p_result) {
-	return p_result;
-}
-
-void RenderingDeviceDriverMetal::command_timestamp_query_pool_reset(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_query_count) {
-}
-
-void RenderingDeviceDriverMetal::command_timestamp_write(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) {
-}
-
 #pragma mark - Labels
 
 void RenderingDeviceDriverMetal::command_begin_label(CommandBufferID p_cmd_buffer, const char *p_label_name, const Color &p_color) {

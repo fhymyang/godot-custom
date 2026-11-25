@@ -371,4 +371,121 @@ RDD::CommandBufferID RenderingDeviceDriverMetal::command_buffer_create(CommandPo
 	return CommandBufferID(obj);
 }
 
+#pragma mark - Timestamp Queries
+
+RDD::QueryPoolID RenderingDeviceDriverMetal::timestamp_query_pool_create(uint32_t p_query_count) {
+	TimestampPool *pool = memnew(TimestampPool);
+	pool->capacity = p_query_count;
+	return QueryPoolID(pool);
+}
+
+void RenderingDeviceDriverMetal::timestamp_query_pool_free(QueryPoolID p_pool_id) {
+	TimestampPool *pool = (TimestampPool *)p_pool_id.id;
+	if (pool->scratch) {
+		_untrack_resource(pool->scratch.get());
+	}
+	memdelete(pool);
+}
+
+void RenderingDeviceDriverMetal::timestamp_query_pool_get_results(QueryPoolID p_pool_id, uint32_t p_query_count, uint64_t *r_results) {
+	TimestampPool *pool = (TimestampPool *)p_pool_id.id;
+	memset(r_results, 0, p_query_count * sizeof(uint64_t));
+	if (!pool->samples) {
+		return;
+	}
+
+	// The RD waits for this frame slot's fence before reading the samples.
+	NS::Data *data = pool->samples->resolveCounterRange(NS::Range::Make(0, p_query_count));
+	if (!data || data->length() != p_query_count * sizeof(MTL::CounterResultTimestamp)) {
+		return;
+	}
+
+	// Calibrate against elapsed CPU time. Counter values and mach ticks can have
+	// different units even when Metal reports the same CPU and GPU timestamp.
+	MTL::Timestamp cpu, gpu;
+	device->sampleTimestamps(&cpu, &gpu);
+	const uint64_t cpu_usec = OS::get_singleton()->get_ticks_usec();
+	if (gpu <= pool->gpu_origin || cpu_usec <= pool->cpu_origin_usec) {
+		return;
+	}
+	const double ns_per_tick = (cpu_usec - pool->cpu_origin_usec) * 1000.0 / (gpu - pool->gpu_origin);
+	const auto *samples = static_cast<const MTL::CounterResultTimestamp *>(data->bytes());
+	uint64_t previous = 0;
+	for (uint32_t i = 0; i < p_query_count; i++) {
+		const uint64_t timestamp = samples[i].timestamp;
+		if (timestamp < pool->gpu_origin || timestamp == MTL::CounterErrorValue || timestamp < previous) {
+			return;
+		}
+		previous = timestamp;
+	}
+
+	for (uint32_t i = 0; i < p_query_count; i++) {
+		r_results[i] = pool->cpu_origin_usec * 1000 + uint64_t((samples[i].timestamp - pool->gpu_origin) * ns_per_tick);
+	}
+}
+
+uint64_t RenderingDeviceDriverMetal::timestamp_query_result_to_time(uint64_t p_result) {
+	return p_result;
+}
+
+void RenderingDeviceDriverMetal::command_timestamp_query_pool_reset(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_query_count) {
+	// Metal overwrites each recorded sample index when the frame slot is reused.
+}
+
+void RenderingDeviceDriverMetal::command_timestamp_write(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) {
+	TimestampPool *pool = (TimestampPool *)p_pool_id.id;
+	ERR_FAIL_UNSIGNED_INDEX(p_index, pool->capacity);
+	if (!pool->initialized) {
+		// Create counter resources only when timestamps are requested.
+		pool->initialized = true;
+		pool->sample_at_blit = device->supportsCounterSampling(MTL::CounterSamplingPointAtBlitBoundary);
+		if (!pool->sample_at_blit && !device->supportsCounterSampling(MTL::CounterSamplingPointAtStageBoundary)) {
+			WARN_PRINT_ONCE("GPU timestamps are unavailable on this Metal device.");
+			return;
+		}
+
+		MTL::CounterSet *timestamp_set = nullptr;
+		NS::Array *sets = device->counterSets();
+		for (NS::UInteger i = 0; sets && i < sets->count(); i++) {
+			MTL::CounterSet *set = sets->object<MTL::CounterSet>(i);
+			if (set->name()->isEqualToString(MTL::CommonCounterSetTimestamp)) {
+				timestamp_set = set;
+				break;
+			}
+		}
+		if (!timestamp_set) {
+			WARN_PRINT_ONCE("The Metal timestamp counter set is unavailable.");
+			return;
+		}
+
+		auto desc = NS::TransferPtr(MTL::CounterSampleBufferDescriptor::alloc()->init());
+		desc->setCounterSet(timestamp_set);
+		desc->setSampleCount(pool->capacity);
+		desc->setStorageMode(MTL::StorageModeShared);
+		NS::Error *error = nullptr;
+		auto samples = NS::TransferPtr(device->newCounterSampleBuffer(desc.get(), &error));
+		ERR_FAIL_NULL_MSG(samples.get(), error ? error->localizedDescription()->utf8String() : "Could not create Metal timestamp counter buffer.");
+		pool->order_event = NS::TransferPtr(device->newEvent());
+		ERR_FAIL_NULL(pool->order_event.get());
+		if (!pool->sample_at_blit) {
+			pool->scratch = NS::TransferPtr(device->newBuffer(4, MTL::ResourceStorageModePrivate));
+			ERR_FAIL_NULL(pool->scratch.get());
+			_track_resource(pool->scratch.get());
+		}
+		pool->samples = std::move(samples);
+	}
+	if (!pool->samples) {
+		return;
+	}
+
+	if (p_index == 0) {
+		MTL::Timestamp cpu;
+		device->sampleTimestamps(&cpu, &pool->gpu_origin);
+		pool->cpu_origin_usec = OS::get_singleton()->get_ticks_usec();
+	}
+
+	MDCommandBuffer *cmd_buffer = (MDCommandBuffer *)p_cmd_buffer.id;
+	cmd_buffer->write_timestamp(pool->samples.get(), pool->scratch.get(), pool->order_event.get(), pool->order_value, p_index, pool->sample_at_blit);
+}
+
 } // namespace MTL3

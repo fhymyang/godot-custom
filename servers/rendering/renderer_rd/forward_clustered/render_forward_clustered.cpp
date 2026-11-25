@@ -1651,12 +1651,9 @@ bool RenderForwardClustered::_process_hybrid_gi(RenderDataRD *p_render_data, Ren
 	if (!hybrid_gi) {
 		hybrid_gi = memnew(Effect);
 	}
-	bool rendered = hybrid_gi->render(p_render_data->render_buffers, r_buffers.hybrid_gi_buffers, *p_render_data->scene_data,
+	RENDER_TIMESTAMP("Hybrid Diffuse GI");
+	return hybrid_gi->render(p_render_data->render_buffers, r_buffers.hybrid_gi_buffers, *p_render_data->scene_data,
 			p_render_data->environment, p_normals, proxies, materials, geometry_list, direction, sun, environment_get_ssao_enabled(p_render_data->environment), MAX(0.025f, environment_get_ssil_radius(p_render_data->environment)), environment_get_ssil_intensity(p_render_data->environment));
-	if (rendered) {
-		RENDER_TIMESTAMP("Hybrid Diffuse GI");
-	}
-	return rendered;
 }
 
 bool RenderForwardClustered::_use_restir_sdfgi(const RenderDataRD *p_render_data) const {

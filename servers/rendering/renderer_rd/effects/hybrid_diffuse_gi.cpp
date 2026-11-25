@@ -39,6 +39,7 @@
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 #include "servers/rendering/rendering_server_globals.h"
+#include "servers/rendering/storage/utilities.h"
 
 using namespace RendererRD;
 
@@ -221,8 +222,13 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 		bindings[2] = sets->get_cache(variants[2], 0, scene_uniform, depth, normal, sample(8, tex(geometry[current])),
 				sample(12, tex(sh[current][0])), sample(13, tex(sh[current][1])), sample(14, tex(sh[current][2])),
 				image(15, rb->get_texture_slice(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING, v, 0)), sample(16, ao));
-		for (int pass = 0; pass < 3; pass++) {
-			if (bindings[pass].is_null()) {
+		static constexpr const char *pass_names[] = {
+			"Hybrid GI Trace",
+			"Hybrid GI Temporal Filter",
+			"Hybrid GI Resolve",
+		};
+		for (RID binding : bindings) {
+			if (binding.is_null()) {
 				return false;
 			}
 			Size2i groups = pass == 2 ? size : coarse;
@@ -230,6 +236,10 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 			rd->compute_list_bind_compute_pipeline(list, pipelines[pass]);
 			rd->compute_list_bind_uniform_set(list, bindings[pass], 0);
 			rd->compute_list_dispatch_threads(list, groups.x, groups.y, 1);
+		}
+		RENDER_TIMESTAMP("> Hybrid GI Compute Passes");
+		for (int pass = 0; pass < 3; pass++) {
+			RENDER_TIMESTAMP(pass_names[pass]);
 			rd->compute_list_end();
 		}
 		data.previous_projection[v] = projection;
@@ -237,6 +247,7 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 	data.previous_camera = scene.cam_transform;
 	data.size = size;
 	data.environment = environment;
+		RENDER_TIMESTAMP("< Hybrid GI Compute Passes");
 	data.frame = frame;
 	return true;
 }

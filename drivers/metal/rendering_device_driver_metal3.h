@@ -43,6 +43,18 @@ class API_AVAILABLE(macos(11.0), ios(14.0), tvos(14.0)) RenderingDeviceDriverMet
 
 	NS::SharedPtr<MTL::CommandQueue> device_queue;
 
+	struct TimestampPool {
+		uint32_t capacity = 0;
+		bool initialized = false;
+		bool sample_at_blit = false;
+		NS::SharedPtr<MTL::Event> order_event;
+		uint64_t order_value = 0;
+		NS::SharedPtr<MTL::CounterSampleBuffer> samples;
+		NS::SharedPtr<MTL::Buffer> scratch;
+		MTL::Timestamp gpu_origin = 0;
+		uint64_t cpu_origin_usec = 0;
+	};
+
 	struct Fence {
 		virtual void signal(MTL::CommandBuffer *p_cmd_buffer) = 0;
 		virtual Error wait(uint32_t p_timeout_ms) = 0;
@@ -103,6 +115,15 @@ public:
 	void command_pool_free(CommandPoolID p_cmd_pool) override;
 
 	CommandBufferID command_buffer_create(CommandPoolID p_cmd_pool) override;
+
+#pragma mark - Queries
+
+	QueryPoolID timestamp_query_pool_create(uint32_t p_query_count) override;
+	void timestamp_query_pool_free(QueryPoolID p_pool_id) override;
+	void timestamp_query_pool_get_results(QueryPoolID p_pool_id, uint32_t p_query_count, uint64_t *r_results) override;
+	uint64_t timestamp_query_result_to_time(uint64_t p_result) override;
+	void command_timestamp_query_pool_reset(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_query_count) override;
+	void command_timestamp_write(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) override;
 
 #pragma mark - Miscellaneous
 

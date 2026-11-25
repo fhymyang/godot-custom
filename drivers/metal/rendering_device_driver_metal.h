@@ -487,20 +487,6 @@ public:
 	virtual void command_bind_raytracing_uniform_set(CommandBufferID p_cmd_buffer, UniformSetID p_uniform_set, ShaderID p_shader, uint32_t p_set_index) override final;
 	virtual void command_trace_rays(CommandBufferID p_cmd_buffer, const ShaderBindingTable &p_raygen_sbt, const ShaderBindingTable &p_miss_sbt, const ShaderBindingTable &p_hit_sbt, uint32_t p_width, uint32_t p_height, uint32_t p_depth) override final;
 
-#pragma mark - Queries
-
-	// ----- TIMESTAMP -----
-
-	// Basic.
-	virtual QueryPoolID timestamp_query_pool_create(uint32_t p_query_count) override final;
-	virtual void timestamp_query_pool_free(QueryPoolID p_pool_id) override final;
-	virtual void timestamp_query_pool_get_results(QueryPoolID p_pool_id, uint32_t p_query_count, uint64_t *r_results) override final;
-	virtual uint64_t timestamp_query_result_to_time(uint64_t p_result) override final;
-
-	// Commands.
-	virtual void command_timestamp_query_pool_reset(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_query_count) override final;
-	virtual void command_timestamp_write(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) override final;
-
 #pragma mark - Labels
 
 	virtual void command_begin_label(CommandBufferID p_cmd_buffer, const char *p_label_name, const Color &p_color) override final;

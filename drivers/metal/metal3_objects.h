@@ -508,6 +508,8 @@ public:
 	void commit() override;
 	void end() override;
 
+	void write_timestamp(MTL::CounterSampleBuffer *p_samples, MTL::Buffer *p_scratch, MTL::Event *p_order_event, uint64_t &r_order_value, uint32_t p_index, bool p_sample_at_blit);
+
 	void bind_pipeline(RDD::PipelineID p_pipeline) override;
 
 #pragma mark - Render Commands
