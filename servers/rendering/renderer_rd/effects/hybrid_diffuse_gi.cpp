@@ -231,23 +231,23 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 			if (binding.is_null()) {
 				return false;
 			}
+		}
+		RENDER_TIMESTAMP("> Hybrid GI Compute Passes");
+		for (int pass = 0; pass < 3; pass++) {
+			RENDER_TIMESTAMP(pass_names[pass]);
 			Size2i groups = pass == 2 ? size : coarse;
 			auto list = rd->compute_list_begin();
 			rd->compute_list_bind_compute_pipeline(list, pipelines[pass]);
 			rd->compute_list_bind_uniform_set(list, bindings[pass], 0);
 			rd->compute_list_dispatch_threads(list, groups.x, groups.y, 1);
-		}
-		RENDER_TIMESTAMP("> Hybrid GI Compute Passes");
-		for (int pass = 0; pass < 3; pass++) {
-			RENDER_TIMESTAMP(pass_names[pass]);
 			rd->compute_list_end();
 		}
+		RENDER_TIMESTAMP("< Hybrid GI Compute Passes");
 		data.previous_projection[v] = projection;
 	}
 	data.previous_camera = scene.cam_transform;
 	data.size = size;
 	data.environment = environment;
-		RENDER_TIMESTAMP("< Hybrid GI Compute Passes");
 	data.frame = frame;
 	return true;
 }
