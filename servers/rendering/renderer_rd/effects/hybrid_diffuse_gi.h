@@ -54,6 +54,7 @@ public:
 		uint32_t capacity = 0;
 		uint64_t frame = 0;
 		RID environment;
+		float previous_sun_luminance = 0.0f;
 		Size2i size;
 		Transform3D previous_camera;
 		Projection previous_projection[RendererSceneRender::MAX_RENDER_VIEWS];

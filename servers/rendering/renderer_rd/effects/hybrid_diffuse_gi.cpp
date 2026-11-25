@@ -144,12 +144,16 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 	const uint64_t frame = RSG::rasterizer->get_frame_number();
 	const uint32_t usage = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
 	const StringName scope = SNAME("hybrid_diffuse_gi");
-	const bool history = data.size == size && data.frame + 1 == frame && data.environment == environment;
+	// A large sun/exposure step also invalidates radiance fetched from last frame's screen color.
+	const float sun_luminance = sun.get_luminance();
+	const bool lighting_continuous = Math::abs(sun_luminance - data.previous_sun_luminance) <= 0.25f * MAX(0.01f, MAX(sun_luminance, data.previous_sun_luminance));
+	const bool history = data.size == size && data.frame + 1 == frame && data.environment == environment && lighting_continuous;
 	if (data.size != size) {
 		rb->clear_context(scope);
 	}
 	const StringName raw = SNAME("sample");
 	const StringName geometry[2] = { SNAME("geometry_0"), SNAME("geometry_1") };
+	const StringName statistics[2] = { SNAME("statistics_0"), SNAME("statistics_1") };
 	const StringName sh[2][3] = { { SNAME("red_0"), SNAME("green_0"), SNAME("blue_0") }, { SNAME("red_1"), SNAME("green_1"), SNAME("blue_1") } };
 	const uint32_t current = frame & 1;
 	auto allocate = [&](const StringName &name, RD::DataFormat format) {
@@ -159,7 +163,7 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 		return false;
 	}
 	for (int i = 0; i < 2; i++) {
-		if (allocate(geometry[i], RD::DATA_FORMAT_R32G32B32A32_SFLOAT).is_null()) {
+		if (allocate(geometry[i], RD::DATA_FORMAT_R32G32B32A32_SFLOAT).is_null() || allocate(statistics[i], RD::DATA_FORMAT_R16G16_SFLOAT).is_null()) {
 			return false;
 		}
 		for (const StringName &name : sh[i]) {
@@ -216,9 +220,10 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 				RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, data.nodes), RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, data.materials),
 				sample(5, rb->get_texture_slice(RB_SCOPE_SSLF, RB_LAST_FRAME, v, 0)), old_geometry,
 				image(7, tex(raw)), image(8, tex(geometry[current])), sample(16, ao), RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 17, data.triangles));
-		bindings[1] = sets->get_cache(variants[1], 0, scene_uniform, old_geometry, sample(7, tex(raw)), sample(8, tex(geometry[current])),
+		bindings[1] = sets->get_cache(variants[1], 0, scene_uniform, depth, old_geometry, sample(7, tex(raw)), sample(8, tex(geometry[current])),
 				sample(9, tex(sh[current ^ 1][0])), sample(10, tex(sh[current ^ 1][1])), sample(11, tex(sh[current ^ 1][2])),
-				image(12, tex(sh[current][0])), image(13, tex(sh[current][1])), image(14, tex(sh[current][2])));
+				image(12, tex(sh[current][0])), image(13, tex(sh[current][1])), image(14, tex(sh[current][2])),
+				sample(18, tex(statistics[current ^ 1])), image(19, tex(statistics[current])));
 		bindings[2] = sets->get_cache(variants[2], 0, scene_uniform, depth, normal, sample(8, tex(geometry[current])),
 				sample(12, tex(sh[current][0])), sample(13, tex(sh[current][1])), sample(14, tex(sh[current][2])),
 				image(15, rb->get_texture_slice(RB_SCOPE_RESTIR_GI, RB_RESTIR_GI_LIGHTING, v, 0)), sample(16, ao));
@@ -248,6 +253,7 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 	data.previous_camera = scene.cam_transform;
 	data.size = size;
 	data.environment = environment;
+	data.previous_sun_luminance = sun_luminance;
 	data.frame = frame;
 	return true;
 }

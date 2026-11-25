@@ -10,9 +10,9 @@ layout(set = 0, binding = 0, std140) uniform Scene {
 	float intensity;
 }
 scene;
+layout(set = 0, binding = 1) uniform sampler2D depth_buffer;
 #if defined(TRACE) || defined(RESOLVE)
 layout(set = 0, binding = 16) uniform sampler2D ambient_occlusion;
-layout(set = 0, binding = 1) uniform sampler2D depth_buffer;
 layout(set = 0, binding = 2) uniform sampler2D normals;
 vec3 position_at(ivec2 pixel, float depth) {
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(textureSize(depth_buffer, 0));
@@ -213,8 +213,13 @@ void main() {
 	}
 	vec3 p = position_at(pixel, depth);
 	vec3 n = normalize(texelFetch(normals, pixel, 0).xyz * 2.0 - 1.0);
-	uint seed = hash(uint(q.x + q.y * imageSize(samples_out).x) ^ hash(scene.frame));
-	float z = float(seed & 65535u) / 65536.0, phi = float(seed >> 16u) * (6.2831853 / 65536.0);
+	// A per-texel rotation of the R2 sequence spreads consecutive samples over
+	// the hemisphere, even over the short window retained by the history filter.
+	uint seed = hash(uint(q.x + q.y * imageSize(samples_out).x));
+	uvec2 sequence = uvec2(seed, hash(seed + 1u)) + scene.frame * uvec2(0xc13fa9a9u, 0x91e10da5u);
+	vec2 sample_uv = vec2(sequence >> 8u) * (1.0 / 16777216.0);
+	float z = sample_uv.x;
+	float phi = sample_uv.y * 6.2831853;
 	vec3 tangent = normalize(cross(abs(n.z) < 0.99 ? vec3(0, 0, 1) : vec3(0, 1, 0), n));
 	vec3 dir = z * n + sqrt(1.0 - z * z) * (cos(phi) * tangent + sin(phi) * cross(n, tangent));
 	vec3 origin = p + n * max(0.03, -p.z * 0.001), hit, hit_normal;
@@ -246,17 +251,9 @@ void main() {
 		}
 	}
 	imageStore(samples_out, q, vec4(clamp(light, vec3(0), vec3(16)), pack_direction(mat3(scene.rotation) * dir)));
-	// Store direction, AO and valid history length as an exactly representable 20-bit integer.
 	vec3 world_normal = mat3(scene.rotation) * n;
-	float age = 1.0;
-	if (previous_uv(p, uv)) {
-		float prior = textureLod(prev_geom, uv, 0.0).w;
-		if (dot(unpack_direction(prior), world_normal) > 0.9) {
-			age = min(16.0, floor(prior / 32768.0) + 1.0);
-		}
-	}
 	float ao = textureLod(ambient_occlusion, (vec2(pixel) + 0.5) / vec2(textureSize(depth_buffer, 0)), 0.0).r;
-	imageStore(geometry_out, q, vec4(p, pack_direction(world_normal) + 1024.0 * round(31.0 * ao) + 32768.0 * age));
+	imageStore(geometry_out, q, vec4(p, pack_direction(world_normal) + 1024.0 * round(31.0 * ao)));
 }
 #endif
 #if defined(FILTER) || defined(RESOLVE)
@@ -271,6 +268,8 @@ float surface_weight(vec4 center, vec4 neighbor) {
 }
 #endif
 #ifdef FILTER
+layout(set = 0, binding = 18) uniform sampler2D old_statistics;
+layout(set = 0, binding = 19, rg16f) uniform writeonly image2D new_statistics;
 layout(set = 0, binding = 7) uniform sampler2D samples_in;
 layout(set = 0, binding = 9) uniform sampler2D old_r;
 layout(set = 0, binding = 10) uniform sampler2D old_g;
@@ -278,6 +277,55 @@ layout(set = 0, binding = 11) uniform sampler2D old_b;
 layout(set = 0, binding = 12, rgba16f) uniform writeonly image2D new_r;
 layout(set = 0, binding = 13, rgba16f) uniform writeonly image2D new_g;
 layout(set = 0, binding = 14, rgba16f) uniform writeonly image2D new_b;
+// Select a single compatible receiver so repeated reprojections do not blur SH detail.
+bool find_history(vec4 center, out ivec2 previous_texel, out float offset) {
+	if (scene.history == 0u || center.z >= 0.0) {
+		return false;
+	}
+	vec4 clip = scene.previous_clip * vec4(center.xyz, 1.0);
+	if (clip.w <= 0.0) {
+		return false;
+	}
+	vec2 uv = 0.5 * (clip.xy / clip.w + 1.0);
+	if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) {
+		return false;
+	}
+	ivec2 full_size = textureSize(depth_buffer, 0);
+	ivec2 coarse_size = textureSize(prev_geom, 0);
+	// TRACE samples full-resolution pixel 4*q + 2 (pixel centers have a 0.5 offset).
+	vec2 pixel = uv * vec2(full_size) - 0.5;
+	ivec2 base = ivec2(floor((pixel - 2.0) * 0.25));
+	vec3 receiver = (scene.previous_view * vec4(center.xyz, 1.0)).xyz;
+	vec3 normal = unpack_direction(center.w);
+	vec3 previous_normal = mat3(scene.previous_view) * transpose(mat3(scene.rotation)) * normal;
+	float depth_limit = max(0.12, -receiver.z * 0.012);
+	float plane_limit = max(0.02, -receiver.z * 0.005);
+	float best = -1.0;
+	for (int y = 0; y < 2; y++) {
+		for (int x = 0; x < 2; x++) {
+			ivec2 at = base + ivec2(x, y);
+			if (any(lessThan(at, ivec2(0))) || any(greaterThanEqual(at, coarse_size))) {
+				continue;
+			}
+			vec4 prior = texelFetch(prev_geom, at, 0);
+			vec3 delta = prior.xyz - receiver;
+			float alignment = dot(normal, unpack_direction(prior.w));
+			float plane_distance = abs(dot(previous_normal, delta));
+			if (prior.z >= 0.0 || abs(delta.z) >= depth_limit || plane_distance >= plane_limit || alignment <= 0.9) {
+				continue;
+			}
+			vec2 d = (vec2(min(at * 4 + 2, full_size - 1)) - pixel) * 0.25;
+			float distance_squared = dot(d, d);
+			float score = distance_squared + (1.0 - alignment) + plane_distance / plane_limit;
+			if (best < 0.0 || score < best) {
+				best = score;
+				previous_texel = at;
+				offset = distance_squared;
+			}
+		}
+	}
+	return best >= 0.0;
+}
 void main() {
 	ivec2 q = ivec2(gl_GlobalInvocationID.xy), size = textureSize(geometry, 0);
 	if (any(greaterThanEqual(q, size))) {
@@ -288,8 +336,7 @@ void main() {
 	float sum = 0.0;
 	for (int y = -1; y <= 1; y++) {
 		for (int x = -1; x <= 1; x++) {
-			int stride = center.w < 4.0 * 32768.0 ? 2 : 1;
-			ivec2 at = clamp(q + stride * ivec2(x, y), ivec2(0), size - 1);
+			ivec2 at = clamp(q + ivec2(x, y), ivec2(0), size - 1);
 			float weight = surface_weight(center, texelFetch(geometry, at, 0));
 			vec4 s = texelFetch(samples_in, at, 0);
 			vec4 basis = vec4(0.5, unpack_direction(s.a));
@@ -299,20 +346,38 @@ void main() {
 			sum += weight;
 		}
 	}
-	vec2 uv;
-	bool reuse = center.z < 0.0 && previous_uv(center.xyz, uv);
-	if (reuse) {
-		reuse = dot(unpack_direction(textureLod(prev_geom, uv, 0.0).w), unpack_direction(center.w)) > 0.9;
-	}
 	for (int c = 0; c < 3; c++) {
 		coeff[c] /= max(sum, 0.001);
 	}
-	if (reuse) {
-		float blend = 1.0 - 1.0 / max(floor(center.w / 32768.0), 1.0);
-		coeff[0] = mix(coeff[0], textureLod(old_r, uv, 0.0), blend);
-		coeff[1] = mix(coeff[1], textureLod(old_g, uv, 0.0), blend);
-		coeff[2] = mix(coeff[2], textureLod(old_b, uv, 0.0), blend);
+	float variance = 0.0;
+	float age = 1.0;
+	ivec2 previous_texel;
+	float offset;
+	if (find_history(center, previous_texel, offset)) {
+		vec4 prior_r = texelFetch(old_r, previous_texel, 0);
+		vec4 prior_g = texelFetch(old_g, previous_texel, 0);
+		vec4 prior_b = texelFetch(old_b, previous_texel, 0);
+		vec2 statistics = texelFetch(old_statistics, previous_texel, 0).rg;
+		float prior_variance = statistics.x;
+		// A distant fallback carries less history into a newly exposed edge.
+		float age_limit = mix(32.0, 8.0, smoothstep(0.5, 1.0, offset));
+		age = min(statistics.y + 1.0, age_limit);
+		// The constant SH coefficient already carries the temporal mean (basis = 0.5).
+		const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+		float prior_mean = dot(vec3(prior_r.x, prior_g.x, prior_b.x), luma);
+		float current = dot(vec3(coeff[0].x, coeff[1].x, coeff[2].x), luma);
+		float delta = current - prior_mean;
+		float sigma = sqrt(prior_variance) + 0.02 + 0.1 * max(current, prior_mean);
+		// Allow the variance estimate to settle before accelerating a lighting change.
+		float change = smoothstep(3.0 * sigma, 6.0 * sigma, abs(delta)) * smoothstep(4.0, 12.0, age);
+		age = mix(age, min(age, 4.0), change);
+		float alpha = 1.0 / age;
+		variance = (1.0 - alpha) * (prior_variance + alpha * delta * delta);
+		coeff[0] = mix(prior_r, coeff[0], alpha);
+		coeff[1] = mix(prior_g, coeff[1], alpha);
+		coeff[2] = mix(prior_b, coeff[2], alpha);
 	}
+	imageStore(new_statistics, q, vec4(variance, age, 0.0, 0.0));
 	imageStore(new_r, q, coeff[0]);
 	imageStore(new_g, q, coeff[1]);
 	imageStore(new_b, q, coeff[2]);
