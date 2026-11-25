@@ -793,6 +793,7 @@ private:
 	void _process_ssao(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections);
 	bool _process_hybrid_reflections(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, uint32_t p_uniform_index, bool p_reverse_cull, const RendererRD::MaterialStorage::Samplers &p_samplers);
 	bool _process_hybrid_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals);
+	bool _use_restir_sdfgi(const RenderDataRD *p_render_data) const;
 	bool _process_restir_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals);
 	void _process_ssil(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections, const Transform3D &p_transform);
 	void _process_ssr(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_slices, const Projection *p_projections, const Vector3 *p_eye_offsets, const Transform3D &p_transform);

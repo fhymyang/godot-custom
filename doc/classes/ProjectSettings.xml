@@ -2980,6 +2980,9 @@
 		<member name="rendering/environment/ssil/quality" type="int" setter="" getter="" default="2">
 			Sets the quality of the screen-space indirect lighting effect. Higher values take more samples and so will result in better quality, at the cost of performance. Setting to [code]Ultra[/code] will use the [member rendering/environment/ssil/adaptive_target] setting.
 		</member>
+		<member name="rendering/environment/ssil/restir_use_sdfgi_probes" type="bool" setter="" getter="" default="false">
+			When ReSTIR GI and SDFGI are enabled in Forward+, samples SDFGI diffuse probes at secondary ray hits in place of the spatial radiance cache. Primary surfaces receive this contribution through ReSTIR. Applies to views without VoxelGI instances.
+		</member>
 		<member name="rendering/environment/ssil/use_hybrid_diffuse_gi" type="bool" setter="" getter="" default="false">
 			When SSIL is enabled in Forward+, samples diffuse lighting at quarter resolution along each axis. Screen-space rays fall back to software tracing against simplified triangle meshes in their rest pose. Directional lighting samples are reconstructed using spherical harmonics and temporal filtering.
 		</member>

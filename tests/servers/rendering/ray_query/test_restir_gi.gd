@@ -70,6 +70,45 @@ func _run() -> void:
 	print("Mean red channel before GI, with the offscreen emitter, and after moving it: ", [baseline, with_gi, moved])
 	var passed := baseline < 0.02 and moved < 0.02
 	passed = passed and (with_gi < 0.02 if check_fallback else with_gi > baseline + 0.025)
+	if passed and not check_fallback:
+		# The black baffle hides the emitter from the measured patch. The white
+		# wall extends around it, providing an emitter -> wall -> floor path.
+		emitter.scale.z = 0.2
+		emitter.position.x = 1.75
+		var black := StandardMaterial3D.new()
+		black.albedo_color = Color.BLACK
+		_add_box(viewport, Vector3(0.12, 3.5, 1.6), Vector3(0.9, 1.75, 0.0), black)
+		_add_box(viewport, Vector3(4.8, 3.0, 0.1), Vector3(0.0, 1.5, 1.5), floor_material)
+		environment.ssil_use_monte_carlo = true
+		for frame in 24:
+			await RenderingServer.frame_post_draw
+		var single_bounce := _mean_red(viewport)
+		environment.ssil_use_monte_carlo = false
+		var multiple_bounces := 0.0
+		for frame in 64:
+			await RenderingServer.frame_post_draw
+			if frame >= 48:
+				multiple_bounces += _mean_red(viewport) / 16.0
+		print("Occluded patch, single bounce and cached multiple bounces: ", [single_bounce, multiple_bounces])
+		emitter.position.x = 20.0
+		for frame in 48:
+			await RenderingServer.frame_post_draw
+		var after_removal := _mean_red(viewport)
+		print("Occluded patch after moving the emitter: ", after_removal)
+		passed = single_bounce < 0.02 and multiple_bounces > single_bounce + 0.025 and after_removal < 0.02
+
+		# Every emitter sample is below half a cache quantization step (1/512).
+		# Amplify only the final GI output so readback can distinguish it from black.
+		emitter_material.emission_energy_multiplier = 0.001
+		environment.ssil_intensity = 1024.0
+		emitter.position.x = 1.75
+		var weak_bounces := 0.0
+		for frame in 96:
+			await RenderingServer.frame_post_draw
+			if frame >= 64:
+				weak_bounces += _mean_red(viewport) / 32.0
+		print("Occluded patch with sub-quantization emitter samples: ", weak_bounces)
+		passed = passed and weak_bounces > 0.01
 	if not passed:
 		push_error("Unexpected offscreen indirect lighting.")
 	quit(0 if passed else 1)

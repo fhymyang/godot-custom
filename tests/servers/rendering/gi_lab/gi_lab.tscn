@@ -1,0 +1,72 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://gi_lab.gd" id="1"]
+
+[sub_resource type="Environment" id="Environment_lab"]
+background_mode = 1
+background_color = Color(0.025, 0.025, 0.025, 1)
+ambient_light_source = 1
+reflected_light_source = 1
+sdfgi_min_cell_size = 0.1
+sdfgi_read_sky_light = false
+sdfgi_use_occlusion = true
+ssil_enabled = true
+ssil_use_restir = true
+ssil_radius = 5.0
+ssil_intensity = 1.0
+
+[sub_resource type="StandardMaterial3D" id="White"]
+
+[sub_resource type="StandardMaterial3D" id="Black"]
+albedo_color = Color(0, 0, 0, 1)
+
+[sub_resource type="StandardMaterial3D" id="Glow"]
+albedo_color = Color(0, 0, 0, 1)
+emission_enabled = true
+emission = Color(1, 0.12, 0.03, 1)
+emission_energy_multiplier = 4.0
+
+[sub_resource type="BoxMesh" id="Mesh_Floor"]
+size = Vector3(5, 0.1, 4)
+material = SubResource("White")
+
+[sub_resource type="BoxMesh" id="Mesh_ReturnWall"]
+size = Vector3(4.8, 3, 0.1)
+material = SubResource("White")
+
+[sub_resource type="BoxMesh" id="Mesh_Baffle"]
+size = Vector3(0.12, 3.5, 1.6)
+material = SubResource("Black")
+
+[sub_resource type="BoxMesh" id="Mesh_Emitter"]
+size = Vector3(0.2, 3, 0.76)
+material = SubResource("Glow")
+
+[node name="GI Lab" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+position = Vector3(0, -0.05, 0)
+mesh = SubResource("Mesh_Floor")
+
+[node name="ReturnWall" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.5, -1.5)
+mesh = SubResource("Mesh_ReturnWall")
+
+[node name="Baffle" type="MeshInstance3D" parent="."]
+position = Vector3(0.9, 1.75, 0)
+mesh = SubResource("Mesh_Baffle")
+
+[node name="Emitter" type="MeshInstance3D" parent="."]
+position = Vector3(1.75, 1.5, 0)
+mesh = SubResource("Mesh_Emitter")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_lab")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+position = Vector3(0, 5, 4.7)
+rotation = Vector3(-0.741, 0, 0)
+projection = 1
+size = 5.6
+current = true

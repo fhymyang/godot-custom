@@ -1659,6 +1659,15 @@ bool RenderForwardClustered::_process_hybrid_gi(RenderDataRD *p_render_data, Ren
 	return rendered;
 }
 
+bool RenderForwardClustered::_use_restir_sdfgi(const RenderDataRD *p_render_data) const {
+	const Ref<RenderSceneBuffersRD> rb = p_render_data->render_buffers;
+	const RID env = p_render_data->environment;
+	return GLOBAL_GET_CACHED(bool, "rendering/environment/ssil/restir_use_sdfgi_probes") && env.is_valid() && rb.is_valid() &&
+			rb->has_custom_data(RB_SCOPE_SDFGI) && p_render_data->raytracing_instances && p_render_data->voxel_gi_instances->size() == 0 &&
+			supports_restir_gi() && environment_get_ssil_enabled(env) && environment_get_ssil_use_restir(env) && !environment_get_ssil_use_monte_carlo(env) &&
+			!GLOBAL_GET_CACHED(bool, "rendering/environment/ssil/use_hybrid_diffuse_gi");
+}
+
 bool RenderForwardClustered::_process_restir_gi(RenderDataRD *p_render_data, RenderBufferDataForwardClustered &r_buffers, const RID *p_normals) {
 	const bool monte_carlo = environment_get_ssil_use_monte_carlo(p_render_data->environment);
 	RENDER_TIMESTAMP(monte_carlo ? "Monte Carlo GI" : "ReSTIR GI");
@@ -1827,8 +1836,14 @@ bool RenderForwardClustered::_process_restir_gi(RenderDataRD *p_render_data, Ren
 	if (!restir_gi) {
 		restir_gi = memnew(RendererRD::RestirGI);
 	}
+	RendererRD::RestirGI::SDFGIProbes probes;
+	if (_use_restir_sdfgi(p_render_data)) {
+		const Ref<RenderSceneBuffersRD> rb = p_render_data->render_buffers;
+		Ref<RendererRD::GI::SDFGI> sdfgi = rb->get_custom_data(RB_SCOPE_SDFGI);
+		probes = { sdfgi_get_ubo(), sdfgi->lightprobe_texture, sdfgi->occlusion_texture };
+	}
 	return restir_gi->render(p_render_data->render_buffers, r_buffers.restir_gi_buffers, *p_render_data->scene_data, environment,
-			RSG::rasterizer->get_frame_number(), p_normals, instances, surfaces, geometry_buffers, lights, omni_lights, settings, monte_carlo);
+			RSG::rasterizer->get_frame_number(), p_normals, instances, surfaces, geometry_buffers, lights, omni_lights, settings, monte_carlo, probes);
 }
 
 void RenderForwardClustered::_process_ssil(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections, const Transform3D &p_transform) {
@@ -1915,7 +1930,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 
 	RENDER_TIMESTAMP("Setup Shadows");
 
-	if (rb.is_valid() && p_use_gi && rb->has_custom_data(RB_SCOPE_SDFGI)) {
+	if (rb.is_valid() && (p_use_gi || _use_restir_sdfgi(p_render_data)) && rb->has_custom_data(RB_SCOPE_SDFGI)) {
 		Ref<RendererRD::GI::SDFGI> sdfgi = rb->get_custom_data(RB_SCOPE_SDFGI);
 		sdfgi->store_probes();
 	}
@@ -2279,7 +2294,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		if (p_render_data->environment.is_valid()) {
 			if (environment_get_sdfgi_enabled(p_render_data->environment) && get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_UNSHADED) {
-				using_sdfgi = true;
+				using_sdfgi = !_use_restir_sdfgi(p_render_data);
 			}
 			if (environment_get_ssr_enabled(p_render_data->environment)) {
 				if (!p_render_data->transparent_bg) {
@@ -2541,7 +2556,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			RD::get_singleton()->draw_list_begin(depth_framebuffer, RD::DRAW_CLEAR_ALL, depth_pass_clear, 0.0f);
 			RD::get_singleton()->draw_list_end();
 			//start compute processes here, so they run at the same time as depth pre-pass
-			_post_prepass_render(p_render_data, using_sdfgi || using_voxelgi);
+			_post_prepass_render(p_render_data, using_sdfgi || using_voxelgi || _use_restir_sdfgi(p_render_data));
 		}
 
 		RD::get_singleton()->draw_command_begin_label("Render Depth Pre-Pass");

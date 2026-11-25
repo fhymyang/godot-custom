@@ -46,6 +46,8 @@ class RestirGI {
 public:
 	struct RenderBuffers {
 		RID tlas;
+		RID sharc[RendererSceneRender::MAX_RENDER_VIEWS];
+		float cache_radius = 0.0f;
 		RID surfaces;
 		RID reservoirs[RendererSceneRender::MAX_RENDER_VIEWS][2];
 		RID uniforms[RendererSceneRender::MAX_RENDER_VIEWS];
@@ -54,6 +56,7 @@ public:
 		uint32_t view_count = 0;
 		Size2i size;
 		bool monte_carlo = false;
+		bool use_sdfgi = false;
 
 		uint64_t last_frame = 0;
 		RID environment;
@@ -96,6 +99,12 @@ public:
 		uint32_t padding[2] = {};
 	};
 
+	struct SDFGIProbes {
+		RID parameters;
+		RID radiance;
+		RID occlusion;
+	};
+
 	struct Settings {
 		float radius;
 		float intensity;
@@ -109,15 +118,18 @@ public:
 	bool render(const Ref<RenderSceneBuffersRD> &p_buffers, RenderBuffers &r_buffers, const RenderSceneDataRD &p_scene, RID p_environment,
 			uint64_t p_frame, const RID *p_normals, const LocalVector<RD::AccelerationStructureInstance> &p_instances,
 			const LocalVector<Surface> &p_surfaces, const HashSet<RID> &p_geometry_buffers, const LocalVector<DirectionalLight> &p_lights, const LocalVector<OmniLight> &p_omni_lights,
-			const Settings &p_settings, bool p_monte_carlo);
+			const Settings &p_settings, bool p_monte_carlo, const SDFGIProbes &p_probes);
 
 private:
 	enum Pass {
+		PASS_SHARC_UPDATE,
+		PASS_SHARC_RESOLVE,
 		PASS_TEMPORAL,
 		PASS_SPATIAL,
 		PASS_RESOLVE,
 		PASS_MONTE_CARLO,
 		PASS_MONTE_CARLO_RESOLVE,
+		PASS_TEMPORAL_SDFGI,
 		PASS_COUNT
 	};
 
@@ -130,6 +142,7 @@ private:
 		float camera_basis[16];
 		float previous_world_to_clip[16];
 		float camera_offset[4];
+		float camera_origin[4];
 		DirectionalLight lights[MAX_LIGHTS];
 		OmniLight omni_lights[MAX_OMNI_LIGHTS];
 		int32_t size[2];

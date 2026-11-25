@@ -4,14 +4,14 @@
 
 #VERSION_DEFINES
 
-#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL)
+#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL) || defined(MODE_SHARC_UPDATE)
 #extension GL_EXT_ray_query : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #endif
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// ReSTIR GI (Ouyang et al., 2021), using one diffuse bounce and bounded reservoirs.
+// ReSTIR GI (Ouyang et al., 2021), with bounded reservoirs and a spatially hashed diffuse radiance cache.
 const float PI = 3.14159265359;
 const uint MAX_HISTORY_AGE = 8u;
 const int MAX_LIGHTS = 4;
@@ -35,6 +35,7 @@ layout(set = 0, binding = 0, std140) uniform Scene {
 	mat4 camera_basis;
 	mat4 previous_world_to_clip;
 	vec4 camera_offset;
+	vec4 camera_origin;
 	DirectionalLight lights[MAX_LIGHTS];
 	OmniLight omni_lights[8];
 	ivec2 size;
@@ -51,7 +52,7 @@ layout(set = 0, binding = 0, std140) uniform Scene {
 }
 scene;
 
-#ifndef MODE_SPATIAL
+#if !defined(MODE_SPATIAL) && !defined(MODE_SHARC_RESOLVE)
 layout(set = 0, binding = 1) uniform sampler2D depth_buffer;
 layout(set = 0, binding = 2) uniform sampler2D normal_buffer;
 #endif
@@ -63,7 +64,7 @@ struct Reservoir {
 	uvec4 attributes; // Octahedral receiver and hit normals, then the sample age.
 };
 
-#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL)
+#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL) || defined(MODE_SHARC_UPDATE)
 struct Surface {
 	uvec2 vertex_address;
 	uvec2 index_address;
@@ -82,12 +83,12 @@ layout(buffer_reference, std430, buffer_reference_align = 4) restrict readonly b
 	uint values[];
 };
 
-#ifdef MONTE_CARLO
+#if defined(MONTE_CARLO)
 layout(set = 0, binding = 5, std430) restrict writeonly buffer CurrentReceivers {
 	uvec4 current_receivers[];
 };
 layout(rgba16f, set = 0, binding = 6) uniform restrict writeonly image2D half_lighting;
-#else
+#elif !defined(MODE_SHARC_UPDATE)
 layout(set = 0, binding = 5, std430) restrict readonly buffer SourceReservoirs {
 	Reservoir source_reservoirs[];
 };
@@ -125,7 +126,7 @@ uint reservoir_index(ivec2 pixel) {
 	return uint(pixel.x + scene.half_size.x * pixel.y);
 }
 
-#ifndef MODE_SPATIAL
+#if !defined(MODE_SPATIAL) && !defined(MODE_SHARC_RESOLVE)
 ivec2 receiver_pixel(ivec2 half_pixel) {
 	return min(half_pixel * 2, scene.size - 1);
 }
@@ -167,7 +168,7 @@ vec3 decode_normal(uint packed) {
 	return normalize(normal);
 }
 
-#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL)
+#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL) || defined(MODE_SHARC_UPDATE)
 
 uint rng;
 
@@ -226,7 +227,7 @@ bool trace_surface(vec3 origin, vec3 direction, float distance, out Hit hit) {
 	return true;
 }
 
-#ifdef MODE_TEMPORAL
+#if defined(MODE_TEMPORAL) || defined(MODE_SHARC_UPDATE)
 bool occluded(vec3 origin, vec3 direction, float distance) {
 	rayQueryEXT query;
 	rayQueryInitializeEXT(query, acceleration_structure, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
@@ -236,7 +237,7 @@ bool occluded(vec3 origin, vec3 direction, float distance) {
 	return rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-vec3 evaluate_radiance(Hit hit) {
+vec3 direct_radiance(Hit hit) {
 	Surface surface = surfaces[hit.surface];
 	vec3 result = surface.emission.rgb;
 	for (uint i = 0u; i < scene.light_count; i++) {
@@ -280,6 +281,154 @@ vec3 evaluate_radiance(Hit hit) {
 }
 #endif
 
+#endif // Ray query passes.
+
+#if defined(MODE_SHARC_UPDATE) || defined(MODE_SHARC_RESOLVE) || (defined(MODE_TEMPORAL) && !defined(MONTE_CARLO) && !defined(RESTIR_SDFGI))
+struct CacheEntry {
+	uint key;
+	uint last_update;
+	uvec2 padding;
+	uvec4 accumulation; // Fixed-point RGB sum and sample count for this frame.
+	vec4 resolved; // Indirect irradiance divided by pi, and effective history length.
+};
+
+layout(set = 0, binding = 8, std430) restrict
+	#ifdef MODE_TEMPORAL
+	readonly
+	#endif
+	buffer RadianceCache {
+	CacheEntry entries[256 * 256];
+};
+
+#ifndef MODE_SHARC_RESOLVE
+uint mix_bits(uint x) {
+	x = (x ^ (x >> 16u)) * 0x7feb352du;
+	x = (x ^ (x >> 15u)) * 0x846ca68bu;
+	return x ^ (x >> 16u);
+}
+
+int cache_slot(Hit hit) {
+	// Power-of-two world grids grow with viewing distance. Separate opposing faces.
+	float level = max(floor(log2(max(length(hit.position) / 8.0, 1.0))), 0.0);
+	float cell_size = max(0.04, scene.radius * 0.0625) * exp2(level);
+	uvec3 cell = uvec3(ivec3(floor((scene.camera_origin.xyz + hit.position) / cell_size)));
+	vec3 n = abs(hit.normal);
+	uint axis = n.x >= max(n.y, n.z) ? 0u : (n.y >= n.z ? 1u : 2u);
+	uint face = axis * 2u + uint(hit.normal[axis] < 0.0);
+	// Mix in order: exchanging a coordinate and the face must not preserve the key.
+	uint key = mix_bits(cell.x);
+	key = mix_bits(key ^ cell.y);
+	key = mix_bits(key ^ cell.z);
+	key = max(1u, mix_bits(key ^ (uint(level) * 6u + face)));
+	uint base = mix_bits(key);
+	uint mask = uint(entries.length()) - 1u;
+#ifdef MODE_SHARC_UPDATE
+	uint first_empty = 8u;
+#endif
+	for (uint probe = 0u; probe < 8u; probe++) {
+		uint slot = (base + probe) & mask;
+#ifdef MODE_SHARC_UPDATE
+		uint stored = atomicAdd(entries[slot].key, 0u);
+		if (stored == 0u) {
+			first_empty = min(first_empty, probe);
+		}
+		if (stored == key) {
+#else
+		if (entries[slot].key == key && entries[slot].resolved.w > 0.0) {
+#endif
+			return int(slot);
+		}
+	}
+#ifdef MODE_SHARC_UPDATE
+	// Expiration leaves holes in probe chains. Find existing entries before inserting.
+	for (uint probe = first_empty; probe < 8u; probe++) {
+		uint slot = (base + probe) & mask;
+		uint stored = atomicCompSwap(entries[slot].key, 0u, key);
+		if (stored == 0u || stored == key) {
+			return int(slot);
+		}
+	}
+#endif
+	return -1;
+}
+#endif
+#endif
+
+#ifdef MODE_SHARC_RESOLVE
+void main() {
+	uint slot = gl_GlobalInvocationID.y * 256u + gl_GlobalInvocationID.x;
+	if (entries[slot].key == 0u) {
+		return;
+	}
+	uvec4 sums = entries[slot].accumulation;
+	uint age = scene.frame - entries[slot].last_update;
+	if (sums.w > 0u) {
+		float count = float(min(sums.w, 4096u));
+		vec3 estimate = vec3(sums.xyz) / (count * 256.0);
+		vec4 old = entries[slot].resolved;
+		// Bound history in frames of current sample support. A fixed sample cap
+		// makes heavily sampled cells replace their estimate every frame.
+		float history = min(old.w, 12.0 * count) * exp2(-float(age) * 0.25);
+		entries[slot].resolved = vec4(mix(estimate, old.rgb, history / (count + history)), count + history);
+		entries[slot].last_update = scene.frame;
+		entries[slot].accumulation = uvec4(0u);
+	} else if (age >= 16u) {
+		entries[slot].key = 0u;
+		entries[slot].resolved = vec4(0.0);
+	}
+}
+#endif
+
+#ifdef RESTIR_SDFGI
+#define SDFGI_MAX_CASCADES 8
+#define SDFGI_UBO_BINDING 8
+#include "../sdfgi_probe_uniforms_inc.glsl"
+layout(set = 0, binding = 9) uniform texture2DArray sdfgi_lightprobe_texture;
+layout(set = 0, binding = 10) uniform texture3D sdfgi_occlusion_cascades;
+layout(set = 0, binding = 11) uniform sampler SAMPLER_LINEAR_CLAMP;
+#include "../sdfgi_probe_sampling_inc.glsl"
+
+vec3 sample_indirect(Hit hit) {
+	vec3 scale = vec3(1.0, sdfgi.y_mult, 1.0);
+	vec3 position = hit.position * scale;
+	vec3 normal = normalize(hit.normal * scale);
+	vec3 result = vec3(0.0);
+	float remaining = 1.0;
+	for (uint i = 0u; i < sdfgi.max_cascades; i++) {
+		vec3 local = (position - sdfgi.cascades[i].position) * sdfgi.cascades[i].to_probe;
+		if (any(lessThan(local, vec3(0.0))) || any(greaterThanEqual(local, sdfgi.cascade_probe_size))) {
+			continue;
+		}
+		vec3 diffuse, unused;
+		float blend;
+		sdfgi_process(i, local, position, normal, normal, false, 1.0, diffuse, unused, blend);
+		result += remaining * (1.0 - blend) * diffuse;
+		remaining *= blend;
+		if (remaining <= 0.0) {
+			break;
+		}
+	}
+	return result * sdfgi.energy;
+}
+#endif
+
+#ifdef MODE_TEMPORAL
+vec3 evaluate_radiance(Hit hit) {
+	vec3 result = direct_radiance(hit);
+#ifdef RESTIR_SDFGI
+	result += clamp(surfaces[hit.surface].diffuse.rgb, 0.0, 1.0) * sample_indirect(hit);
+#elif !defined(MONTE_CARLO)
+	int slot = cache_slot(hit);
+	if (slot >= 0) {
+		// Resolve ages the history weight and evicts stale entries. Keep its brightness until eviction.
+		result += clamp(surfaces[hit.surface].diffuse.rgb, 0.0, 1.0) * entries[slot].resolved.rgb;
+	}
+#endif
+	return result;
+}
+#endif
+
+#if defined(MODE_TEMPORAL) || defined(MODE_SPATIAL)
 vec3 integrand(vec3 receiver, vec3 normal, vec3 hit, vec3 incident_radiance) {
 	vec3 offset = hit - receiver;
 	float distance = length(offset);
@@ -366,7 +515,7 @@ bool compatible(Reservoir source, vec3 position, vec3 normal) {
 }
 #endif
 
-#ifdef MODE_TEMPORAL
+#if defined(MODE_TEMPORAL) || defined(MODE_SHARC_UPDATE)
 vec3 sample_cosine_hemisphere(vec3 normal) {
 	float phi = 2.0 * PI * random_float();
 	float r2 = random_float();
@@ -375,6 +524,53 @@ vec3 sample_cosine_hemisphere(vec3 normal) {
 	return tangent * (cos(phi) * sqrt(r2)) + bitangent * (sin(phi) * sqrt(r2)) + normal * sqrt(1.0 - r2);
 }
 
+#endif
+
+#ifdef MODE_SHARC_UPDATE
+void main() {
+	ivec2 tile = ivec2(gl_GlobalInvocationID.xy);
+	rng = uint(tile.x + tile.y * scene.size.x) ^ (scene.frame * 83492791u + scene.view * 73856093u);
+	ivec2 pixel = tile * 4 + ivec2(random_float() * 4.0, random_float() * 4.0);
+	vec3 receiver, normal;
+	if (!in_bounds(pixel, scene.size) || !load_receiver(pixel, receiver, normal)) {
+		return;
+	}
+	Hit hit;
+	if (!trace_surface(receiver + normal * 0.005, sample_cosine_hemisphere(normal), scene.radius, hit)) {
+		return;
+	}
+
+	// Estimate only the indirect term at the reservoir candidate's surface.
+	// With cosine-weighted Lambert sampling the segment throughput reduces to albedo.
+	vec3 radiance = vec3(0.0);
+	vec3 throughput = vec3(1.0);
+	Hit first = hit;
+	for (int bounce = 0; bounce < 2; bounce++) {
+		Hit next_hit;
+		if (max(max(throughput.r, throughput.g), throughput.b) <= 0.0 ||
+				!trace_surface(hit.position + hit.normal * 0.005, sample_cosine_hemisphere(hit.normal), scene.radius, next_hit)) {
+			break;
+		}
+		throughput *= 1.0 - smoothstep(scene.radius * 0.75, scene.radius, length(next_hit.position - hit.position));
+		radiance += throughput * direct_radiance(next_hit);
+		// Apply the first hit's albedo at query time so adjacent materials retain their color.
+		throughput *= clamp(surfaces[next_hit.surface].diffuse.rgb, 0.0, 1.0);
+		hit = next_hit;
+	}
+	int slot = cache_slot(first);
+	if (slot >= 0 && atomicAdd(entries[slot].accumulation.w, 1u) < 4096u) {
+		// Stochastic rounding preserves sub-LSB energy in expectation.
+		// Share the threshold across channels to keep neutral samples neutral.
+		vec3 scaled = clamp(radiance, 0.0, 256.0) * 256.0;
+		uvec3 sample_sum = uvec3(floor(scaled)) + uvec3(lessThan(vec3(random_float()), fract(scaled)));
+		atomicAdd(entries[slot].accumulation.x, sample_sum.x);
+		atomicAdd(entries[slot].accumulation.y, sample_sum.y);
+		atomicAdd(entries[slot].accumulation.z, sample_sum.z);
+	}
+}
+#endif
+
+#ifdef MODE_TEMPORAL
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (!in_bounds(pixel, scene.half_size)) {
@@ -578,7 +774,13 @@ void main() {
 				vec3 clipped = clamp(history.rgb, light - extent, light + extent);
 				// Reduce persistence when lighting moves outside the current neighborhood.
 				float change = length(history.rgb - clipped) / max(length(extent) + length(light) * 0.1, 0.001);
-				float retained = min(history.a, 11.0) / (1.0 + change * change);
+				float history_limit = 11.0;
+#ifndef MONTE_CARLO
+				// Stationary receivers can integrate sparse indirect samples for longer.
+				vec2 motion = uv * vec2(scene.size) - (vec2(pixel) + 0.5);
+				history_limit = mix(24.0, history_limit, smoothstep(0.0, 2.0, length(motion)));
+#endif
+				float retained = min(history.a, history_limit) / (1.0 + change * change);
 				frames += retained;
 				light = mix(light, clipped, retained / frames);
 			}
