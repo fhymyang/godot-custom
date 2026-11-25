@@ -22,12 +22,21 @@ struct DirectionalLight {
 	uvec4 layers;
 };
 
+struct OmniLight {
+	vec4 position_inv_range;
+	vec4 radiance_attenuation;
+	uint layers;
+	float shadow_opacity;
+	uvec2 padding;
+};
+
 layout(set = 0, binding = 0, std140) uniform Scene {
 	mat4 inverse_projection;
 	mat4 camera_basis;
 	mat4 previous_world_to_clip;
 	vec4 camera_offset;
 	DirectionalLight lights[MAX_LIGHTS];
+	OmniLight omni_lights[8];
 	ivec2 size;
 	ivec2 half_size;
 	float radius;
@@ -38,6 +47,7 @@ layout(set = 0, binding = 0, std140) uniform Scene {
 	uint history_valid;
 	uint light_count;
 	uint view;
+	uint omni_count;
 }
 scene;
 
@@ -241,6 +251,30 @@ vec3 evaluate_radiance(Hit hit) {
 			visibility -= light.direction_shadow.w;
 		}
 		result += surface.diffuse.rgb * light.radiance.rgb * (visibility * cosine / PI);
+	}
+	for (uint i = 0u; i < scene.omni_count; i++) {
+		OmniLight light = scene.omni_lights[i];
+		vec3 offset = light.position_inv_range.xyz - hit.position;
+		float distance_to_light = length(offset);
+		float nd = distance_to_light * light.position_inv_range.w;
+		if (nd >= 1.0 || distance_to_light <= 0.001 || (surface.layout_data.z & light.layers) == 0u) {
+			continue;
+		}
+		vec3 direction = offset / distance_to_light;
+		float cosine = dot(hit.normal, direction);
+		if (cosine <= 0.0) {
+			continue;
+		}
+		float falloff = 1.0 - nd * nd * nd * nd;
+		float attenuation = falloff * falloff * pow(distance_to_light, -light.radiance_attenuation.w);
+		float visibility = 1.0;
+		vec3 shadow_origin = hit.position + hit.normal * 0.005;
+		vec3 shadow_ray = light.position_inv_range.xyz - shadow_origin;
+		float shadow_length = length(shadow_ray);
+		if (light.shadow_opacity > 0.0 && shadow_length > 0.002 && occluded(shadow_origin, shadow_ray / shadow_length, shadow_length - 0.001)) {
+			visibility -= light.shadow_opacity;
+		}
+		result += surface.diffuse.rgb * light.radiance_attenuation.rgb * (cosine * visibility * attenuation / PI);
 	}
 	return clamp(result, vec3(0.0), vec3(128.0));
 }

@@ -1770,11 +1770,65 @@ bool RenderForwardClustered::_process_restir_gi(RenderDataRD *p_render_data, Ren
 		lights.push_back(directional);
 	}
 
+	// Reserve directional slots independently so nearby lanterns never displace the sun.
+	LocalVector<RendererRD::RestirGI::OmniLight> omni_lights;
+	float priorities[RendererRD::RestirGI::MAX_OMNI_LIGHTS] = {};
+	for (uint64_t i = 0; i < p_render_data->lights->size(); i++) {
+		const RID instance = (*p_render_data->lights)[i];
+		const RID light = light_storage->light_instance_get_base_light(instance);
+		if (light_storage->light_get_type(light) != RSE::LIGHT_OMNI || light_storage->light_is_negative(light)) {
+			continue;
+		}
+		const float range = light_storage->light_get_param(light, RSE::LIGHT_PARAM_RANGE);
+		float energy = light_storage->light_get_param(light, RSE::LIGHT_PARAM_ENERGY) *
+				light_storage->light_get_param(light, RSE::LIGHT_PARAM_INDIRECT_ENERGY) * exposure;
+		energy *= is_using_physical_light_units() ? light_storage->light_get_param(light, RSE::LIGHT_PARAM_INTENSITY) / float(4.0 * Math::PI) : float(Math::PI);
+		const Vector3 position = light_storage->light_instance_get_base_transform(instance).origin - camera_origin;
+		float shadow_opacity = light_storage->light_has_shadow(light) ? light_storage->light_get_param(light, RSE::LIGHT_PARAM_SHADOW_OPACITY) : 0.0f;
+		if (light_storage->light_is_distance_fade_enabled(light)) {
+			const float distance = position.length();
+			const float fade_length = MAX(0.0001f, light_storage->light_get_distance_fade_length(light));
+			const float begin = light_storage->light_get_distance_fade_begin(light);
+			const float shadow_begin = light_storage->light_get_distance_fade_shadow(light);
+			energy *= 1.0f - Math::smoothstep(begin, begin + fade_length, distance);
+			shadow_opacity *= 1.0f - Math::smoothstep(shadow_begin, shadow_begin + fade_length, distance);
+		}
+		if (range <= 0.0f || energy <= 0.0f) {
+			continue;
+		}
+		const float priority = position.length_squared() / (range * range);
+		uint32_t slot = omni_lights.size();
+		if (slot == RendererRD::RestirGI::MAX_OMNI_LIGHTS) {
+			slot = 0;
+			for (uint32_t j = 1; j < omni_lights.size(); j++) {
+				if (priorities[j] > priorities[slot]) {
+					slot = j;
+				}
+			}
+			if (priority >= priorities[slot]) {
+				continue;
+			}
+		} else {
+			omni_lights.push_back({});
+		}
+		priorities[slot] = priority;
+		RendererRD::RestirGI::OmniLight &omni = omni_lights[slot];
+		const Color radiance = light_storage->light_get_color(light).srgb_to_linear() * energy;
+		for (int axis = 0; axis < 3; axis++) {
+			omni.position[axis] = position[axis];
+			omni.radiance[axis] = radiance[axis];
+		}
+		omni.inv_range = 1.0f / range;
+		omni.attenuation = light_storage->light_get_param(light, RSE::LIGHT_PARAM_ATTENUATION);
+		omni.layers = light_storage->light_get_cull_mask(light);
+		omni.shadow_opacity = shadow_opacity;
+	}
+
 	if (!restir_gi) {
 		restir_gi = memnew(RendererRD::RestirGI);
 	}
 	return restir_gi->render(p_render_data->render_buffers, r_buffers.restir_gi_buffers, *p_render_data->scene_data, environment,
-			RSG::rasterizer->get_frame_number(), p_normals, instances, surfaces, geometry_buffers, lights, settings, monte_carlo);
+			RSG::rasterizer->get_frame_number(), p_normals, instances, surfaces, geometry_buffers, lights, omni_lights, settings, monte_carlo);
 }
 
 void RenderForwardClustered::_process_ssil(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const RID *p_normal_buffers, const Projection *p_projections, const Transform3D &p_transform) {

@@ -84,6 +84,18 @@ public:
 		uint32_t layers[4] = {};
 	};
 
+	static constexpr uint32_t MAX_OMNI_LIGHTS = 8;
+
+	struct OmniLight {
+		float position[3];
+		float inv_range;
+		float radiance[3];
+		float attenuation;
+		uint32_t layers;
+		float shadow_opacity;
+		uint32_t padding[2] = {};
+	};
+
 	struct Settings {
 		float radius;
 		float intensity;
@@ -96,7 +108,7 @@ public:
 
 	bool render(const Ref<RenderSceneBuffersRD> &p_buffers, RenderBuffers &r_buffers, const RenderSceneDataRD &p_scene, RID p_environment,
 			uint64_t p_frame, const RID *p_normals, const LocalVector<RD::AccelerationStructureInstance> &p_instances,
-			const LocalVector<Surface> &p_surfaces, const HashSet<RID> &p_geometry_buffers, const LocalVector<DirectionalLight> &p_lights,
+			const LocalVector<Surface> &p_surfaces, const HashSet<RID> &p_geometry_buffers, const LocalVector<DirectionalLight> &p_lights, const LocalVector<OmniLight> &p_omni_lights,
 			const Settings &p_settings, bool p_monte_carlo);
 
 private:
@@ -119,6 +131,7 @@ private:
 		float previous_world_to_clip[16];
 		float camera_offset[4];
 		DirectionalLight lights[MAX_LIGHTS];
+		OmniLight omni_lights[MAX_OMNI_LIGHTS];
 		int32_t size[2];
 		int32_t half_size[2];
 		Settings settings;
@@ -126,6 +139,8 @@ private:
 		uint32_t history_valid;
 		uint32_t light_count;
 		uint32_t view;
+		uint32_t omni_count;
+		uint32_t padding[3] = {};
 	};
 };
 

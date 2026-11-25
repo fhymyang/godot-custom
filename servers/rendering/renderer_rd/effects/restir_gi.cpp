@@ -80,16 +80,17 @@ RestirGI::~RestirGI() {
 
 bool RestirGI::render(const Ref<RenderSceneBuffersRD> &p_buffers, RenderBuffers &r_buffers, const RenderSceneDataRD &p_scene, RID p_environment,
 		uint64_t p_frame, const RID *p_normals, const LocalVector<RD::AccelerationStructureInstance> &p_instances, const LocalVector<Surface> &p_surfaces,
-		const HashSet<RID> &p_geometry_buffers, const LocalVector<DirectionalLight> &p_lights, const Settings &p_settings, bool p_monte_carlo) {
+		const HashSet<RID> &p_geometry_buffers, const LocalVector<DirectionalLight> &p_lights, const LocalVector<OmniLight> &p_omni_lights, const Settings &p_settings, bool p_monte_carlo) {
 	static_assert(sizeof(Surface) == 64);
 	static_assert(sizeof(DirectionalLight) == 48);
-	static_assert(sizeof(SceneUniforms) == 448);
+	static_assert(sizeof(OmniLight) == 48);
+	static_assert(sizeof(SceneUniforms) == 848);
 	static constexpr uint32_t reservoir_size = 64; // Four vec4/uvec4 fields in restir_gi.glsl.
 
 	RD *rd = RD::get_singleton();
 	UniformSetCacheRD *uniform_sets = UniformSetCacheRD::get_singleton();
 	ERR_FAIL_NULL_V(uniform_sets, false);
-	ERR_FAIL_COND_V(p_instances.size() != p_surfaces.size() || p_lights.size() > MAX_LIGHTS, false);
+	ERR_FAIL_COND_V(p_instances.size() != p_surfaces.size() || p_lights.size() > MAX_LIGHTS || p_omni_lights.size() > MAX_OMNI_LIGHTS, false);
 
 	const uint32_t view_count = p_buffers->get_view_count();
 	ERR_FAIL_COND_V(view_count > RendererSceneRender::MAX_RENDER_VIEWS, false);
@@ -203,6 +204,10 @@ bool RestirGI::render(const Ref<RenderSceneBuffersRD> &p_buffers, RenderBuffers 
 		uniforms.frame = uint32_t(p_frame);
 		uniforms.history_valid = history_valid;
 		uniforms.light_count = p_lights.size();
+		uniforms.omni_count = p_omni_lights.size();
+		for (uint32_t i = 0; i < p_omni_lights.size(); i++) {
+			uniforms.omni_lights[i] = p_omni_lights[i];
+		}
 		uniforms.view = view;
 
 		if (rd->buffer_update(r_buffers.uniforms[view], 0, sizeof(SceneUniforms), &uniforms) != OK) {
