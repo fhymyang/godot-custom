@@ -26,7 +26,8 @@ layout(set = 0, binding = 5, std140) uniform SceneData {
 	mat4 projection[2];
 	mat4 inv_projection[2];
 	vec4 eye_offset[2];
-} scene;
+}
+scene;
 
 #ifdef SCREEN_TRACE
 #define QUEUE_ACCESS writeonly
@@ -36,7 +37,8 @@ layout(set = 0, binding = 5, std140) uniform SceneData {
 
 layout(set = 0, binding = 6, std430) restrict QUEUE_ACCESS buffer Misses {
 	uint pixels[];
-} misses;
+}
+misses;
 
 #ifdef SCREEN_TRACE
 layout(set = 0, binding = 7, std430) restrict buffer Dispatch {
@@ -47,14 +49,16 @@ layout(set = 0, binding = 7, std430) restrict readonly buffer Dispatch {
 	uint groups_y;
 	uint groups_z;
 	uint count;
-} dispatch;
+}
+dispatch;
 
 layout(push_constant, std430) uniform Params {
 	uint view;
 	uint node_count;
 	bool orthogonal;
 	uint pad;
-} params;
+}
+params;
 
 const float MAX_TRAVEL = 48.0;
 const uint GROUPS_PER_ROW = 1024;
@@ -269,7 +273,8 @@ struct Node {
 
 layout(set = 0, binding = 8, std430) restrict readonly buffer Nodes {
 	Node nodes[];
-} bvh;
+}
+bvh;
 
 vec2 box_interval(vec3 origin, vec3 ray, vec3 minimum, vec3 maximum) {
 	vec3 safe_ray = mix(ray, mix(vec3(-1e-7), vec3(1e-7), greaterThanEqual(ray, vec3(0.0))), lessThan(abs(ray), vec3(1e-7)));

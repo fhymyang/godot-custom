@@ -108,7 +108,7 @@ layout(rgba16f, set = 0, binding = 6) uniform restrict writeonly image2D half_li
 layout(set = 0, binding = 3) uniform sampler2D half_lighting;
 layout(rgba16f, set = 0, binding = 4) uniform restrict writeonly image2D lighting;
 layout(set = 0, binding = 5, std430) restrict readonly buffer PreviousReceivers {
-	#ifdef MONTE_CARLO
+#ifdef MONTE_CARLO
 	uvec4 previous_receivers[];
 #else
 	Reservoir previous_receivers[];
@@ -293,10 +293,10 @@ struct CacheEntry {
 };
 
 layout(set = 0, binding = 8, std430) restrict
-	#ifdef MODE_TEMPORAL
-	readonly
-	#endif
-	buffer RadianceCache {
+#ifdef MODE_TEMPORAL
+		readonly
+#endif
+		buffer RadianceCache {
 	CacheEntry entries[256 * 256];
 };
 

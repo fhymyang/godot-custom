@@ -30,11 +30,10 @@
 
 #include "hybrid_diffuse_gi.h"
 
-#include "core/config/project_settings.h"
-
 #include "restir_gi.h"
 #include "ss_effects.h"
 
+#include "core/config/project_settings.h"
 #include "servers/rendering/renderer_compositor.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"

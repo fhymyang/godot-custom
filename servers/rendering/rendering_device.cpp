@@ -4026,7 +4026,7 @@ RID RenderingDevice::index_buffer_create(uint32_t p_index_count, IndexBufferForm
 	index_buffer.supports_restart_indices = p_use_restart_indices;
 	index_buffer.index_count = p_index_count;
 	uint32_t size_bytes = p_index_count * ((p_format == INDEX_BUFFER_FORMAT_UINT16) ? 2 : 4);
-// BLAS creation validates the maximum index in release builds too.
+	// BLAS creation validates the maximum index in release builds too.
 	bool validate_indices = p_creation_bits.has_flag(BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
 #ifdef DEBUG_ENABLED
 	validate_indices = true;
