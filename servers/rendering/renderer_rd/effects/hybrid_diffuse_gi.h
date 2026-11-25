@@ -56,6 +56,7 @@ public:
 		RID environment;
 		float previous_sun_luminance = 0.0f;
 		Size2i size;
+		int trace_step = 0;
 		Transform3D previous_camera;
 		Projection previous_projection[RendererSceneRender::MAX_RENDER_VIEWS];
 		void clear();

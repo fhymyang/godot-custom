@@ -8,6 +8,7 @@ layout(set = 0, binding = 0, std140) uniform Scene {
 	vec4 sun_direction_radius, sun;
 	uint node_count, frame, history;
 	float intensity;
+	int trace_step;
 }
 scene;
 layout(set = 0, binding = 1) uniform sampler2D depth_buffer;
@@ -204,7 +205,7 @@ void main() {
 	if (any(greaterThanEqual(q, imageSize(samples_out)))) {
 		return;
 	}
-	ivec2 pixel = min(q * 4 + 2, textureSize(depth_buffer, 0) - 1);
+	ivec2 pixel = min(q * scene.trace_step + scene.trace_step / 2, textureSize(depth_buffer, 0) - 1);
 	float depth = texelFetch(depth_buffer, pixel, 0).r;
 	if (depth <= 0.0) {
 		imageStore(geometry_out, q, vec4(0));
@@ -292,9 +293,10 @@ bool find_history(vec4 center, out ivec2 previous_texel, out float offset) {
 	}
 	ivec2 full_size = textureSize(depth_buffer, 0);
 	ivec2 coarse_size = textureSize(prev_geom, 0);
-	// TRACE samples full-resolution pixel 4*q + 2 (pixel centers have a 0.5 offset).
+	// Convert to the TRACE sample grid, accounting for pixel centers.
 	vec2 pixel = uv * vec2(full_size) - 0.5;
-	ivec2 base = ivec2(floor((pixel - 2.0) * 0.25));
+	int sample_offset = scene.trace_step / 2;
+	ivec2 base = ivec2(floor((pixel - float(sample_offset)) / float(scene.trace_step)));
 	vec3 receiver = (scene.previous_view * vec4(center.xyz, 1.0)).xyz;
 	vec3 normal = unpack_direction(center.w);
 	vec3 previous_normal = mat3(scene.previous_view) * transpose(mat3(scene.rotation)) * normal;
@@ -314,7 +316,7 @@ bool find_history(vec4 center, out ivec2 previous_texel, out float offset) {
 			if (prior.z >= 0.0 || abs(delta.z) >= depth_limit || plane_distance >= plane_limit || alignment <= 0.9) {
 				continue;
 			}
-			vec2 d = (vec2(min(at * 4 + 2, full_size - 1)) - pixel) * 0.25;
+			vec2 d = (vec2(min(at * scene.trace_step + sample_offset, full_size - 1)) - pixel) / float(scene.trace_step);
 			float distance_squared = dot(d, d);
 			float score = distance_squared + (1.0 - alignment) + plane_distance / plane_limit;
 			if (best < 0.0 || score < best) {
@@ -398,7 +400,7 @@ void main() {
 	vec4 basis = vec4(1, mat3(scene.rotation) * n);
 	float ao = textureLod(ambient_occlusion, (vec2(p) + 0.5) / vec2(imageSize(lighting)), 0.0).r;
 	vec4 center = vec4(position_at(p, depth), pack_direction(basis.yzw) + 1024.0 * round(31.0 * ao));
-	vec2 grid = (vec2(p) - 2.0) / 4.0;
+	vec2 grid = (vec2(p) - float(scene.trace_step / 2)) / float(scene.trace_step);
 	ivec2 base = ivec2(floor(grid)), size = textureSize(geometry, 0);
 	vec2 f = fract(grid);
 	vec3 light = vec3(0);

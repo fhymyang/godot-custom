@@ -30,6 +30,8 @@
 
 #include "hybrid_diffuse_gi.h"
 
+#include "core/config/project_settings.h"
+
 #include "restir_gi.h"
 #include "ss_effects.h"
 
@@ -86,7 +88,8 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 	}
 
 	const Size2i size = rb->get_internal_size();
-	const Size2i coarse = (size + Size2i(3, 3)) / 4;
+	const int trace_step = GLOBAL_GET_CACHED(bool, "rendering/environment/ssil/hybrid_diffuse_gi_half_resolution") ? 2 : 4;
+	const Size2i coarse = (size + Size2i(trace_step - 1, trace_step - 1)) / trace_step;
 	LocalVector<HybridReflections::Node> nodes;
 	if (!proxies.is_empty()) {
 		HybridReflections::build_nodes(nodes, proxies.ptr(), proxies.size());
@@ -147,8 +150,9 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 	// A large sun/exposure step also invalidates radiance fetched from last frame's screen color.
 	const float sun_luminance = sun.get_luminance();
 	const bool lighting_continuous = Math::abs(sun_luminance - data.previous_sun_luminance) <= 0.25f * MAX(0.01f, MAX(sun_luminance, data.previous_sun_luminance));
-	const bool history = data.size == size && data.frame + 1 == frame && data.environment == environment && lighting_continuous;
-	if (data.size != size) {
+	const bool same_grid = data.size == size && data.trace_step == trace_step;
+	const bool history = same_grid && data.frame + 1 == frame && data.environment == environment && lighting_continuous;
+	if (!same_grid) {
 		rb->clear_context(scope);
 	}
 	const StringName raw = SNAME("sample");
@@ -182,6 +186,8 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 			float sun_direction[4], sun[4];
 			uint32_t count, frame, history;
 			float intensity;
+			int32_t trace_step;
+			uint32_t padding[3];
 		} u = {};
 		const Projection projection = rb->get_view_count() > 1 ? scene.get_view_projection(v) : scene.get_cam_projection();
 		const Projection previous_view(data.previous_camera.affine_inverse() * scene.cam_transform);
@@ -197,6 +203,7 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 		u.sun[3] = sun.a;
 		u.sun_direction[3] = radius;
 		u.intensity = intensity;
+		u.trace_step = trace_step;
 		u.count = nodes.size();
 		u.frame = frame;
 		u.history = history;
@@ -252,6 +259,7 @@ bool HybridDiffuseGI::render(const Ref<RenderSceneBuffersRD> &rb, Buffers &data,
 	}
 	data.previous_camera = scene.cam_transform;
 	data.size = size;
+	data.trace_step = trace_step;
 	data.environment = environment;
 	data.previous_sun_luminance = sun_luminance;
 	data.frame = frame;
