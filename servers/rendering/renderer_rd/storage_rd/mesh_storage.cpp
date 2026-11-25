@@ -564,8 +564,83 @@ void MeshStorage::_mesh_surface_clear(Mesh *p_mesh, int p_surface) {
 namespace {
 struct ProxyTriangle {
 	Vector3 a, b, c;
-	Vector3 center() const { return (a + b + c) / 3.0f; }
+	AABB bounds;
+	Vector3 center;
 };
+
+struct ProxyTriangleBin {
+	AABB bounds;
+	uint32_t count = 0;
+
+	void add(const AABB &p_bounds, uint32_t p_count) {
+		if (p_count == 0) {
+			return;
+		}
+		bounds = count == 0 ? p_bounds : bounds.merge(p_bounds);
+		count += p_count;
+	}
+
+	real_t cost() const {
+		const Vector3 &size = bounds.size;
+		return count * (size.x * size.y + size.y * size.z + size.z * size.x);
+	}
+};
+
+uint32_t split_proxy_triangles(ProxyTriangle *p_faces, uint32_t p_count, const AABB &p_bounds, const AABB &p_centers) {
+	constexpr int bin_count = 12;
+	int best_axis = -1;
+	int best_bin = -1;
+	real_t best_cost = 0;
+	auto bin_index = [&](const ProxyTriangle &p_face, int p_axis) {
+		real_t offset = (p_face.center[p_axis] - p_centers.position[p_axis]) / p_centers.size[p_axis];
+		return CLAMP(int(offset * bin_count), 0, bin_count - 1);
+	};
+
+	if (p_count >= 8) {
+		// Keep splits bounded so a string of outliers cannot make the tree deep.
+		const uint32_t min_child_count = (p_count + 7) / 8;
+		for (int axis = 0; axis < 3; axis++) {
+			if (p_centers.size[axis] <= 0) {
+				continue;
+			}
+			ProxyTriangleBin bins[bin_count];
+			for (uint32_t i = 0; i < p_count; i++) {
+				bins[bin_index(p_faces[i], axis)].add(p_faces[i].bounds, 1);
+			}
+			real_t right_costs[bin_count];
+			ProxyTriangleBin right;
+			for (int i = bin_count - 1; i > 0; i--) {
+				right.add(bins[i].bounds, bins[i].count);
+				right_costs[i] = right.cost();
+			}
+			ProxyTriangleBin left;
+			for (int i = 0; i < bin_count - 1; i++) {
+				left.add(bins[i].bounds, bins[i].count);
+				if (left.count < min_child_count || p_count - left.count < min_child_count) {
+					continue;
+				}
+				const real_t cost = left.cost() + right_costs[i + 1];
+				if (best_axis == -1 || cost < best_cost) {
+					best_axis = axis;
+					best_bin = i;
+					best_cost = cost;
+				}
+			}
+		}
+	}
+	if (best_axis != -1) {
+		return std::partition(p_faces, p_faces + p_count, [&](const ProxyTriangle &p_face) {
+			return bin_index(p_face, best_axis) <= best_bin;
+		}) - p_faces;
+	}
+
+	const int axis = p_bounds.get_longest_axis_index();
+	const uint32_t mid = p_count / 2;
+	std::nth_element(p_faces, p_faces + mid, p_faces + p_count, [axis](const ProxyTriangle &p_a, const ProxyTriangle &p_b) {
+		return p_a.center[axis] < p_b.center[axis];
+	});
+	return mid;
+}
 
 void build_triangle_nodes(Vector<MeshStorage::GIProxyNode> &r_nodes, ProxyTriangle *p_faces, uint32_t p_count) {
 	MeshStorage::GIProxyNode node = {};
@@ -579,21 +654,17 @@ void build_triangle_nodes(Vector<MeshStorage::GIProxyNode> &r_nodes, ProxyTriang
 			node.c[axis] = p_faces->c[axis];
 		}
 	} else {
-		AABB box(p_faces->a, Vector3());
-		for (uint32_t i = 0; i < p_count; i++) {
-			box.expand_to(p_faces[i].a);
-			box.expand_to(p_faces[i].b);
-			box.expand_to(p_faces[i].c);
+		AABB box = p_faces[0].bounds;
+		AABB centers(p_faces[0].center, Vector3());
+		for (uint32_t i = 1; i < p_count; i++) {
+			box.merge_with(p_faces[i].bounds);
+			centers.expand_to(p_faces[i].center);
 		}
 		for (int axis = 0; axis < 3; axis++) {
 			node.a[axis] = box.position[axis] - 0.00001;
 			node.b[axis] = box.get_end()[axis] + 0.00001;
 		}
-		const int axis = box.get_longest_axis_index();
-		const uint32_t mid = p_count / 2;
-		std::nth_element(p_faces, p_faces + mid, p_faces + p_count, [axis](const ProxyTriangle &a, const ProxyTriangle &b) {
-			return a.center()[axis] < b.center()[axis];
-		});
+		const uint32_t mid = split_proxy_triangles(p_faces, p_count, box, centers);
 		build_triangle_nodes(r_nodes, p_faces, mid);
 		build_triangle_nodes(r_nodes, p_faces + mid, p_count - mid);
 	}
@@ -683,12 +754,18 @@ const MeshStorage::GIProxyGeometry &MeshStorage::mesh_get_gi_proxy(RID p_mesh, u
 		if (uint32_t(a) >= vertices.size() || uint32_t(b) >= vertices.size() || uint32_t(c) >= vertices.size()) {
 			continue;
 		}
-		ProxyTriangle face = { vertices[a], vertices[b], vertices[c] };
-		if ((face.b - face.a).cross(face.c - face.a).length_squared() > 1e-18) {
-			faces.push_back(face);
+		const Vector3 &v0 = vertices[a];
+		const Vector3 &v1 = vertices[b];
+		const Vector3 &v2 = vertices[c];
+		if ((v1 - v0).cross(v2 - v0).length_squared() > 1e-18) {
+			AABB bounds(v0, Vector3());
+			bounds.expand_to(v1);
+			bounds.expand_to(v2);
+			faces.push_back({ v0, v1, v2, bounds, (v0 + v1 + v2) / 3.0f });
 		}
 	}
 	if (!faces.is_empty()) {
+		proxy.nodes.reserve(faces.size() * 2 - 1);
 		build_triangle_nodes(proxy.nodes, faces.ptr(), faces.size());
 	}
 	return proxy;
