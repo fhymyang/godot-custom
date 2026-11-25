@@ -43,7 +43,7 @@ namespace RendererRD {
 
 class MeshStorage : public RendererMeshStorage {
 public:
-	// A threaded local-space BVH. Leaves carry triangle vertices, branches carry traversal bounds.
+	// A threaded local-space BVH. Leaves carry a vertex, two edges and the first edge length. Branches carry traversal bounds.
 	struct GIProxyNode {
 		float a[3];
 		uint32_t end;

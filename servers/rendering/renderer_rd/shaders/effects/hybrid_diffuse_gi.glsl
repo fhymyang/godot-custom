@@ -104,18 +104,22 @@ bool trace_mesh(vec3 origin, vec3 direction, uvec2 range, bool any_hit, inout fl
 			}
 			continue;
 		}
-		vec3 e1 = node.b - node.a, e2 = node.c.xyz - node.a;
+		vec3 e1 = node.b, e2 = node.c.xyz;
 		vec3 p = cross(direction, e2);
 		float det = dot(e1, p);
-		if (abs(det) <= 1e-8 * length(e1) * length(p)) {
+		if (abs(det) <= 1e-8 * node.c.w * length(p)) {
 			continue;
 		}
 		vec3 offset = origin - node.a;
-		float u = dot(offset, p) / det;
+		float inv_det = 1.0 / det;
+		float u = dot(offset, p) * inv_det;
+		if (u < 0.0 || u > 1.0) {
+			continue;
+		}
 		vec3 q = cross(offset, e1);
-		float v = dot(direction, q) / det;
-		float t = dot(e2, q) / det;
-		if (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.005 && t < nearest) {
+		float v = dot(direction, q) * inv_det;
+		float t = dot(e2, q) * inv_det;
+		if (v >= 0.0 && u + v <= 1.0 && t > 0.005 && t < nearest) {
 			if (any_hit) {
 				return true;
 			}

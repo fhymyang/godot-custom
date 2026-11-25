@@ -650,9 +650,10 @@ void build_triangle_nodes(Vector<MeshStorage::GIProxyNode> &r_nodes, ProxyTriang
 		node.triangle = 1;
 		for (int axis = 0; axis < 3; axis++) {
 			node.a[axis] = p_faces->a[axis];
-			node.b[axis] = p_faces->b[axis];
-			node.c[axis] = p_faces->c[axis];
+			node.b[axis] = float(p_faces->b[axis]) - node.a[axis];
+			node.c[axis] = float(p_faces->c[axis]) - node.a[axis];
 		}
+		node.c[3] = Math::sqrt(node.b[0] * node.b[0] + node.b[1] * node.b[1] + node.b[2] * node.b[2]);
 	} else {
 		AABB box = p_faces[0].bounds;
 		AABB centers(p_faces[0].center, Vector3());
