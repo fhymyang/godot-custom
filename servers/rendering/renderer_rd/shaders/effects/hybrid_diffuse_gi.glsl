@@ -90,7 +90,7 @@ layout(set = 0, binding = 17, std430) readonly buffer TriangleNodes {
 	TriangleNode triangle_nodes[];
 };
 
-bool trace_mesh(vec3 origin, vec3 direction, uvec2 range, inout float nearest, out vec3 normal) {
+bool trace_mesh(vec3 origin, vec3 direction, uvec2 range, bool any_hit, inout float nearest, out vec3 normal) {
 	vec3 inv = inverse_direction(direction);
 	bool found = false;
 	for (uint i = 0u; i < range.y;) {
@@ -115,6 +115,9 @@ bool trace_mesh(vec3 origin, vec3 direction, uvec2 range, inout float nearest, o
 		float v = dot(direction, q) / det;
 		float t = dot(e2, q) / det;
 		if (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.005 && t < nearest) {
+			if (any_hit) {
+				return true;
+			}
 			nearest = t;
 			normal = cross(e1, e2);
 			found = true;
@@ -123,7 +126,7 @@ bool trace_mesh(vec3 origin, vec3 direction, uvec2 range, inout float nearest, o
 	return found;
 }
 
-bool trace_proxies(vec3 origin, vec3 direction, inout float nearest, out uint material, out vec3 normal) {
+bool trace_proxies(vec3 origin, vec3 direction, bool any_hit, inout float nearest, out uint material, out vec3 normal) {
 	vec3 inv = inverse_direction(direction);
 	bool found = false;
 	for (uint i = 0u; i < scene.node_count;) {
@@ -144,8 +147,11 @@ bool trace_proxies(vec3 origin, vec3 direction, inout float nearest, out uint ma
 		}
 		vec3 face_normal;
 		uint candidate = node.leaf - 1u;
-		if (!trace_mesh(o, d, materials[candidate].geometry.xy, nearest, face_normal)) {
+		if (!trace_mesh(o, d, materials[candidate].geometry.xy, any_hit, nearest, face_normal)) {
 			continue;
+		}
+		if (any_hit) {
+			return true;
 		}
 		// Use the inverse transpose for nonuniformly scaled instances.
 		normal = normalize(node.to_box[0].xyz * face_normal.x + node.to_box[1].xyz * face_normal.y + node.to_box[2].xyz * face_normal.z);
@@ -155,6 +161,13 @@ bool trace_proxies(vec3 origin, vec3 direction, inout float nearest, out uint ma
 	}
 	return found;
 }
+
+bool proxies_occluded(vec3 origin, vec3 direction, float distance) {
+	uint material;
+	vec3 normal;
+	return trace_proxies(origin, direction, true, distance, material, normal);
+}
+
 bool screen_trace(vec3 origin, vec3 dir, out vec3 hit) {
 	float last = 0.0;
 	for (int i = 1; i <= 12; i++) {
@@ -211,7 +224,7 @@ void main() {
 	uint material;
 	if (screen_trace(origin, dir, hit) && previous_uv(hit, uv)) {
 		light = textureLod(previous_color, uv, 0.0).rgb;
-	} else if (trace_proxies(origin, dir, dist, material, hit_normal)) {
+	} else if (trace_proxies(origin, dir, false, dist, material, hit_normal)) {
 		hit = origin + dir * dist;
 		vec4 clip = scene.projection * vec4(hit, 1);
 		vec2 curr_uv = clip.xy / clip.w * 0.5 + 0.5;
@@ -226,10 +239,7 @@ void main() {
 		} else {
 			Material m = materials[material];
 			float cosine = max(dot(hit_normal, scene.sun_direction_radius.xyz), 0.0);
-			float shadow_distance = scene.sun_direction_radius.w;
-			uint blocker;
-			vec3 blocker_normal;
-			if (cosine > 0.0 && trace_proxies(hit + hit_normal * 0.03, scene.sun_direction_radius.xyz, shadow_distance, blocker, blocker_normal)) {
+			if (cosine > 0.0 && proxies_occluded(hit + hit_normal * 0.03, scene.sun_direction_radius.xyz, scene.sun_direction_radius.w)) {
 				cosine *= 1.0 - scene.sun.a;
 			}
 			light = m.emission.rgb + m.diffuse.rgb * scene.sun.rgb * cosine;
